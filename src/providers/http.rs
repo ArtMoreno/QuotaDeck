@@ -103,6 +103,8 @@ mod tests {
                         Err(e) => panic!("local test server: {e}"),
                     }
                 };
+                // Windows accepted sockets inherit the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();

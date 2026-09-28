@@ -88,6 +88,13 @@ impl GlyphSet {
 /// Kept byte-for-byte aligned with that font's `codepoints.toml`. Agy borrows
 /// the Gemini mark because Antigravity is Google's harness and the font has no
 /// separate Antigravity logo.
+///
+/// OpenRouter is not in that font, so QuotaDeck's own font carries it. It
+/// lives at U+E500 rather than the next slot after Grok: the upstream font
+/// hands out codepoints sequentially from U+E1A0, so any slot next to its
+/// run is claimed by whatever logo it adds next, and a terminal that loads
+/// the upstream font first then draws that logo instead of OpenRouter's.
+/// U+E500 is also outside every Nerd Fonts block.
 fn icon_font_glyph(provider: Provider) -> Option<&'static str> {
     Some(match provider {
         Provider::Claude => "\u{E1A0}",
@@ -97,7 +104,7 @@ fn icon_font_glyph(provider: Provider) -> Option<&'static str> {
         Provider::Hermes => "\u{E1AA}",
         Provider::Grok => "\u{E1B1}",
         Provider::Agy => "\u{E1AE}",
-        Provider::OpenRouter => "\u{E1B2}",
+        Provider::OpenRouter => "\u{E500}",
     })
 }
 
@@ -160,11 +167,11 @@ mod tests {
     fn openrouter_uses_its_installed_brand_glyph() {
         assert_eq!(
             GlyphSet::IconFont.glyph(Provider::OpenRouter),
-            Some("\u{E1B2}")
+            Some("\u{E500}")
         );
         assert_eq!(
             GlyphSet::IconFont.label(Provider::OpenRouter, "OpenRouter"),
-            "\u{E1B2} OpenRouter"
+            "\u{E500} OpenRouter"
         );
     }
 
@@ -193,7 +200,7 @@ mod tests {
         assert_eq!(GlyphSet::IconFont.glyph(Provider::Grok), Some("\u{E1B1}"));
         assert_eq!(
             GlyphSet::IconFont.glyph(Provider::OpenRouter),
-            Some("\u{E1B2}")
+            Some("\u{E500}")
         );
     }
 

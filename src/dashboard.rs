@@ -2520,7 +2520,7 @@ mod tests {
                 crate::brand::GlyphSet::IconFont,
                 "\u{e1a0} Claude",
                 "\u{e1a2} OpenCode",
-                "\u{e1b2} OpenRouter",
+                "\u{e500} OpenRouter",
             ),
             (
                 crate::brand::GlyphSet::Unicode,

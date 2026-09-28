@@ -394,7 +394,11 @@ Installing a font for another terminal does not configure WezTerm's fallback lis
 3. Reload WezTerm with Ctrl+Shift+R. No Herdr or agent restart is needed.
 
 The bundled icon-only font includes Claude, Codex, OpenCode, omp, Hermes,
-Gemini/Agy, Grok, and OpenRouter. It is an MIT-licensed subset of Herdr Agent
+Gemini/Agy, Grok, and OpenRouter. OpenRouter sits at U+E500, away from Herdr
+Agent Icons Max's own run from U+E1A0: that font hands out the next slot to
+whatever logo it adds next, and a terminal that loads it first would draw
+that logo in OpenRouter's place. If OpenRouter shows an empty box while the
+other logos work, the bundled font is not in the terminal's fallback list. It is an MIT-licensed subset of Herdr Agent
 Icons Max plus the existing CC0 OpenRouter path; see
 [font license](docs/icons/FONT-LICENSE.txt). No OS-wide font installation is needed.
 QuotaDeck does not overwrite your terminal configuration during plugin updates.
@@ -402,7 +406,7 @@ QuotaDeck does not overwrite your terminal configuration during plugin updates.
 Verify selection with:
 
 ```sh
-wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e1b2
+wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e500
 ```
 
 ### Noctty: missing logos / empty boxes
@@ -412,7 +416,8 @@ wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e1b2
 2. Add this line to Noctty's `config.ghostty`:
 
 ```ini
-font-codepoint-map = U+E1A0-U+E1B2=QuotaDeck Icons
+font-codepoint-map = U+E1A0-U+E1B1=QuotaDeck Icons
+font-codepoint-map = U+E500=QuotaDeck Icons
 ```
 
 Run `noctty +perform-action reload_config` or open a new Noctty window. Keep

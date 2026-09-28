@@ -33,6 +33,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The `quotadeck` command is installed on macOS and Linux too, and forwards
   arguments: `quotadeck settings`, `quotadeck dashboard --json`.
 
+### Fixed
+
+- The OpenRouter brand mark moved from U+E1B2 to U+E500. Herdr Agent Icons
+  Max allocates codepoints sequentially from U+E1A0, so a newer copy of that
+  font claims U+E1B2 for another logo and a terminal that loads it first
+  drew that logo in OpenRouter's row. Reload the bundled
+  `QuotaDeckIcons-Regular.ttf` and, for Noctty, add the U+E500 mapping.
+
 ### Changed
 
 - The interactive dashboard repaints in place instead of clearing the screen

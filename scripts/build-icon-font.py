@@ -26,6 +26,10 @@ subsetter = subset.Subsetter(options=options)
 subsetter.populate(unicodes=codes)
 subsetter.subset(font)
 # OpenRouter is not present in the upstream font; use our existing CC0 path.
+# It goes to U+E500, well clear of the upstream font's sequential run from
+# U+E1A0: a slot next to that run is taken by whatever logo upstream adds
+# next, and a terminal that loads the upstream font first would draw that.
+OPENROUTER = 0xE500
 svg = RecordingPen()
 # Take only the mark: the documentation SVG also has a background rectangle.
 path = ElementTree.parse(root / 'docs/icons/openrouter.svg').find('.//{http://www.w3.org/2000/svg}path')
@@ -43,7 +47,7 @@ font['glyf'][name] = pen.glyph()
 font['hmtx'][name] = (600, 0)
 for table in font['cmap'].tables:
     if table.isUnicode():
-        table.cmap[0xE1B2] = name
+        table.cmap[OPENROUTER] = name
 for record in font['name'].names:
     replacements = {1:'QuotaDeck Icons', 2:'Regular', 3:'QuotaDeckIcons-1.0',
         4:'QuotaDeck Icons Regular', 6:'QuotaDeckIcons-Regular', 16:'QuotaDeck Icons', 17:'Regular'}
@@ -52,6 +56,6 @@ for record in font['name'].names:
 output = root / 'docs/icons/QuotaDeckIcons-Regular.ttf'
 font.save(output)
 check = TTFont(output)
-assert set(check.getBestCmap()) == set(codes + [0xE1B2])
+assert set(check.getBestCmap()) == set(codes + [OPENROUTER])
 assert all(check['glyf'][n].numberOfContours > 0 for n in check.getBestCmap().values())
 print('Verified all eight provider glyphs:', output.name)

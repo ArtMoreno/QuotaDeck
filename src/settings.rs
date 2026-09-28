@@ -68,6 +68,9 @@ enum Page {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Row {
     Choice(Choice),
+    /// A display choice stored with the dashboard settings: it needs no
+    /// `configure` run, only a save.
+    Display(DisplayChoice),
     Fields,
     Agents,
     DashboardProviders,
@@ -90,6 +93,55 @@ enum Choice {
     Alert,
 }
 
+/// A two-way display choice kept in the dashboard settings file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayChoice {
+    Bars,
+    ResetClock,
+    SidebarMeter,
+}
+
+impl DisplayChoice {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bars => "Dashboard bars",
+            Self::ResetClock => "Reset times",
+            Self::SidebarMeter => "Sidebar meter",
+        }
+    }
+
+    fn value(self, dashboard: &DashboardPreferences) -> &'static str {
+        match self {
+            Self::Bars => on_off(dashboard.display.bars),
+            Self::ResetClock => {
+                if dashboard.display.reset_clock {
+                    "clock"
+                } else {
+                    "countdown"
+                }
+            }
+            Self::SidebarMeter => on_off(dashboard.display.sidebar_meter),
+        }
+    }
+
+    fn toggle(self, dashboard: &mut DashboardPreferences) {
+        let display = &mut dashboard.display;
+        match self {
+            Self::Bars => display.bars = !display.bars,
+            Self::ResetClock => display.reset_clock = !display.reset_clock,
+            Self::SidebarMeter => display.sidebar_meter = !display.sidebar_meter,
+        }
+    }
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 impl Choice {
     fn label(self) -> &'static str {
         match self {
@@ -109,8 +161,11 @@ fn rows(page: Page, dashboard: &DashboardPreferences) -> Vec<Row> {
     match page {
         Page::Main => vec![
             Row::Choice(Choice::Percent),
+            Row::Display(DisplayChoice::Bars),
+            Row::Display(DisplayChoice::ResetClock),
             Row::Choice(Choice::Layout),
             Row::Choice(Choice::RowGap),
+            Row::Display(DisplayChoice::SidebarMeter),
             Row::Choice(Choice::Interval),
             Row::Choice(Choice::Brand),
             Row::Choice(Choice::Glyphs),
@@ -229,6 +284,7 @@ impl Settings {
     fn cycle(&mut self, row: Row, step: i8) {
         match row {
             Row::Fields
+            | Row::Display(_)
             | Row::Agents
             | Row::DashboardProviders
             | Row::DashboardProvider(_)
@@ -647,6 +703,7 @@ fn change(
                 fields.insert(field);
             }
         }
+        Row::Display(choice) => choice.toggle(dashboard),
         _ => draft.cycle(row, step),
     }
 }
@@ -892,7 +949,10 @@ fn fit_height(frame: String, height: u16, selected_line: usize) -> String {
 
 fn selected_line(page: Page, selected: usize) -> usize {
     match page {
-        Page::Main if selected == 10 => 16,
+        // The agents row sits below a blank line and its group heading.
+        Page::Main if selected + 1 == rows(Page::Main, &DashboardPreferences::default()).len() => {
+            4 + selected + 2
+        }
         Page::Main => 4 + selected,
         Page::DashboardProviders => 6 + selected,
         Page::Fields | Page::Agents | Page::DashboardFields(_) => 4 + selected,
@@ -924,64 +984,65 @@ fn render_main(
     draw_row(output, title, "", CYAN, false, width, ansi);
     draw_blank(output, width, ansi);
 
-    for (index, choice) in [
-        Choice::Percent,
-        Choice::Layout,
-        Choice::RowGap,
-        Choice::Interval,
-        Choice::Brand,
-        Choice::Glyphs,
-        Choice::Order,
-        Choice::Alert,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let selected = index == selected;
-        let raw_value = draft.choice_value(choice);
-        let value = selection_value(&raw_value, selected);
-        let label = marked_label(
-            choice.label(),
-            draft.choice_value(choice) != applied.choice_value(choice),
+    let main_rows = rows(Page::Main, dashboard_draft);
+    for (index, row) in main_rows.iter().enumerate() {
+        let row_selected = index == selected;
+        let (label, value, color) = match row {
+            Row::Choice(choice) => (
+                marked_label(
+                    choice.label(),
+                    draft.choice_value(*choice) != applied.choice_value(*choice),
+                ),
+                draft.choice_value(*choice),
+                TEXT,
+            ),
+            Row::Display(choice) => (
+                marked_label(
+                    choice.label(),
+                    choice.value(dashboard_draft) != choice.value(dashboard_applied),
+                ),
+                choice.value(dashboard_draft).to_string(),
+                TEXT,
+            ),
+            Row::Fields => (
+                marked_label("Fields", draft.fields != applied.fields),
+                field_summary(*draft),
+                TEXT,
+            ),
+            Row::DashboardProviders => {
+                let visible = dashboard_draft
+                    .providers
+                    .iter()
+                    .filter(|preference| preference.show)
+                    .count();
+                (
+                    marked_label(
+                        "Dashboard providers",
+                        dashboard_draft.providers != dashboard_applied.providers,
+                    ),
+                    format!("{visible}/{}", dashboard_draft.providers.len()),
+                    TEXT,
+                )
+            }
+            // Agents are drawn as their own group below.
+            Row::Agents => continue,
+            Row::DashboardProvider(_) | Row::DashboardField(_) | Row::Field(_) | Row::Agent(_) => {
+                unreachable!()
+            }
+        };
+        draw_row(
+            output,
+            &label,
+            &selection_value(&value, row_selected),
+            color,
+            row_selected,
+            width,
+            ansi,
         );
-        draw_row(output, &label, &value, TEXT, selected, width, ansi);
     }
-
-    let fields_selected = selected == 8;
-    let fields_value = selection_value(&field_summary(*draft), fields_selected);
-    let fields_label = marked_label("Fields", draft.fields != applied.fields);
-    draw_row(
-        output,
-        &fields_label,
-        &fields_value,
-        TEXT,
-        fields_selected,
-        width,
-        ansi,
-    );
-
-    let dashboard_selected = selected == 9;
-    let visible = dashboard_draft
-        .providers
-        .iter()
-        .filter(|preference| preference.show)
-        .count();
-    let dashboard_label = marked_label("Dashboard providers", dashboard_draft != dashboard_applied);
-    draw_row(
-        output,
-        &dashboard_label,
-        &selection_value(
-            &format!("{visible}/{}", dashboard_draft.providers.len()),
-            dashboard_selected,
-        ),
-        TEXT,
-        dashboard_selected,
-        width,
-        ansi,
-    );
     draw_blank(output, width, ansi);
 
-    let agents_selected = selected == 10;
+    let agents_selected = selected + 1 == main_rows.len();
     draw_row(output, "Agents", "", MUTED, false, width, ansi);
     let primary_dirty = draft.agents[..7] != applied.agents[..7];
     let primary_label = marked_label("claude codex grok agy opencode pi omp", primary_dirty);
@@ -1492,12 +1553,15 @@ mod tests {
     fn compact_pages_wrap_without_exposing_individual_fields_or_agents() {
         let dashboard = dashboard();
         let main = rows(Page::Main, &dashboard);
-        assert_eq!(main.len(), 11);
+        assert_eq!(main.len(), 14);
         assert!(matches!(main[0], Row::Choice(Choice::Percent)));
-        assert!(matches!(main[8], Row::Fields));
-        assert!(matches!(main[9], Row::DashboardProviders));
-        assert!(matches!(main[10], Row::Agents));
-        assert_eq!(step_selection(&main, 0, -1), 10);
+        assert!(matches!(main[1], Row::Display(DisplayChoice::Bars)));
+        assert!(matches!(main[11], Row::Fields));
+        assert!(matches!(main[12], Row::DashboardProviders));
+        assert!(matches!(main[13], Row::Agents));
+        assert_eq!(step_selection(&main, 0, -1), 13);
+        assert_eq!(selected_line(Page::Main, 13), 19);
+        assert_eq!(selected_line(Page::Main, 12), 16);
         assert_eq!(
             rows(Page::Fields, &dashboard).len(),
             SidebarField::ALL.len()
@@ -1511,11 +1575,15 @@ mod tests {
     #[test]
     fn main_frame_matches_the_designed_compact_settings_card() {
         let applied = settings();
+        let layout_row = rows(Page::Main, &dashboard())
+            .iter()
+            .position(|row| matches!(row, Row::Choice(Choice::Layout)))
+            .unwrap();
         let clean = render(
             &applied,
             applied,
             (&dashboard(), &dashboard()),
-            (Page::Main, 1),
+            (Page::Main, layout_row),
             TARGET_WIDTH,
             None,
             false,
@@ -1528,7 +1596,7 @@ mod tests {
             &draft,
             applied,
             (&dashboard(), &dashboard()),
-            (Page::Main, 1),
+            (Page::Main, layout_row),
             TARGET_WIDTH,
             Some("Nothing to apply."),
             false,
@@ -1536,6 +1604,9 @@ mod tests {
         assert!(frame.contains("QuotaDeck settings *"), "{frame}");
         assert!(frame.contains("Sidebar layout *"), "{frame}");
         assert!(frame.contains("‹ stacked ›"), "{frame}");
+        assert!(frame.contains("Dashboard bars"), "{frame}");
+        assert!(frame.contains("Sidebar meter"), "{frame}");
+        assert!(frame.contains("countdown"), "{frame}");
         assert!(frame.contains("Brand glyphs"), "{frame}");
         assert!(
             frame.contains("claude codex grok agy opencode pi omp"),
@@ -1563,6 +1634,50 @@ mod tests {
             assert!(!line.contains('\n'), "{frame}");
             assert_eq!(line.chars().count(), TARGET_WIDTH as usize, "{line:?}");
         }
+    }
+
+    #[test]
+    fn display_rows_change_only_the_dashboard_draft_and_mark_it_dirty() {
+        let applied = settings();
+        let mut draft = applied;
+        let dashboard_applied = dashboard();
+        let mut dashboard_draft = dashboard_applied.clone();
+        let mut page = Page::Main;
+        let mut selected = 0;
+        for (choice, step) in [
+            (DisplayChoice::Bars, 1),
+            (DisplayChoice::ResetClock, -1),
+            (DisplayChoice::SidebarMeter, 1),
+        ] {
+            change(
+                &mut page,
+                &mut selected,
+                &mut draft,
+                &mut dashboard_draft,
+                Row::Display(choice),
+                step,
+            );
+        }
+        assert_eq!(draft, applied, "display rows never touch configure state");
+        assert!(!dashboard_draft.display.bars);
+        assert!(dashboard_draft.display.reset_clock);
+        assert!(dashboard_draft.display.sidebar_meter);
+        assert_eq!(page, Page::Main);
+        let frame = render(
+            &draft,
+            applied,
+            (&dashboard_draft, &dashboard_applied),
+            (Page::Main, 2),
+            TARGET_WIDTH,
+            None,
+            false,
+        );
+        assert!(frame.contains("QuotaDeck settings *"), "{frame}");
+        assert!(frame.contains("Dashboard bars *"), "{frame}");
+        assert!(frame.contains("Reset times *"), "{frame}");
+        assert!(frame.contains("‹ clock ›"), "{frame}");
+        assert!(frame.contains("Sidebar meter *"), "{frame}");
+        assert!(!frame.contains("Dashboard providers *"), "{frame}");
     }
 
     #[test]

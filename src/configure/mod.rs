@@ -1,9 +1,9 @@
 pub mod agy;
 pub mod claude;
+mod font;
 pub mod grok;
 pub mod herdr;
 mod integration;
-#[cfg(windows)]
 mod launcher;
 mod statusline;
 
@@ -65,8 +65,8 @@ pub fn run(
         }
         herdr::uninstall(agents, full)?;
         if full {
-            #[cfg(windows)]
             launcher::uninstall()?;
+            font::uninstall()?;
             // Herdr keeps this view until something clears it, so an uninstall
             // that skipped it would leave the panel sorted by a token this
             // plugin no longer publishes.
@@ -157,9 +157,12 @@ pub fn run(
             grok::apply()?;
         }
         integration::report_missing(agents);
-        #[cfg(windows)]
         launcher::apply()?;
+        font::apply(glyphs)?;
         cache.clear_settings_apply_pending()?;
+        // A report, not part of the install: a probe that cannot run must
+        // never fail an otherwise good configure.
+        let _ = crate::signin::print_local_report();
     } else {
         let cache = CacheStore::from_env().ok();
         let layout = resolved_sidebar_layout(options.sidebar_layout, cache.as_ref());

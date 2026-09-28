@@ -22,7 +22,9 @@ fn main() -> Result<()> {
         Command::Startup { provider } => herdr_agent_quota::refresh::startup(&provider.providers()),
         Command::Event => herdr_agent_quota::refresh::event(),
         Command::Focus => herdr_agent_quota::refresh::focus(),
-        Command::Dashboard => herdr_agent_quota::dashboard::run(),
+        Command::Dashboard { json: false } => herdr_agent_quota::dashboard::run(),
+        Command::Dashboard { json: true } => herdr_agent_quota::dashboard::run_json(),
+        Command::Setup { no_prompt } => herdr_agent_quota::signin::run(no_prompt),
         Command::Settings => herdr_agent_quota::settings::run(),
         Command::Configure {
             check,
@@ -77,10 +79,17 @@ fn main() -> Result<()> {
         Command::OpenDashboardSplit => herdr_agent_quota::herdr::open_dashboard_split(),
         Command::ClaudeStatusline => herdr_agent_quota::configure::claude::run_statusline_hook(),
         Command::AgyStatusline => herdr_agent_quota::configure::agy::run_statusline_hook(),
-        Command::ParseHerdrActionJson { log_id } => {
+        Command::ParseHerdrActionJson { log_id, stdout } => {
             use std::io::Read;
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
+            if let (true, Some(log_id)) = (stdout, log_id.as_deref()) {
+                print!(
+                    "{}",
+                    herdr_agent_quota::herdr::action_log_stdout(&input, log_id)?
+                );
+                return Ok(());
+            }
             println!(
                 "{}",
                 herdr_agent_quota::herdr::parse_action_json(&input, log_id.as_deref())?

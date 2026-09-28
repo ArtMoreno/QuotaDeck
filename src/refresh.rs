@@ -293,10 +293,7 @@ fn handle_named_pane(cache: &CacheStore, pane: AgentPane, topic_pane: Option<&st
             refresh_selected(cache, &[provider], false, &panes)?;
         }
     }
-    let style = RowStyle::new(
-        cache.percent_style().unwrap_or_default(),
-        cache.brand_glyphs().unwrap_or_default(),
-    );
+    let style = sidebar_row_style(cache);
     let tokens = resolved_pane_tokens(
         cache,
         &mut panes[0],
@@ -313,6 +310,20 @@ fn handle_named_pane(cache: &CacheStore, pane: AgentPane, topic_pane: Option<&st
     // rather than at the next poll.
     notify_low_quota(cache, &tokens);
     publish_pane_tokens(&panes, &tokens, CacheStore::now_millis(), include_topic)
+}
+
+/// How every published sidebar token is shaped: the percentage style, the
+/// brand marks, and whether the window tokens carry a meter.
+fn sidebar_row_style(cache: &CacheStore) -> RowStyle {
+    RowStyle::new(
+        cache.percent_style().unwrap_or_default(),
+        cache.brand_glyphs().unwrap_or_default(),
+    )
+    .with_meter(
+        DashboardPreferences::load_read_only(cache)
+            .map(|preferences| preferences.display.sidebar_meter)
+            .unwrap_or_default(),
+    )
 }
 
 fn resolved_pane_tokens(
@@ -508,8 +519,8 @@ fn refresh_omp_target(
 /// Refresh a billing target that has no 1:1 harness collector.
 ///
 /// A failure never clears the pane: it keeps the last good snapshot for this
-/// same target and only records a short public problem, "credentials
-/// unavailable" when no Go login can be found.
+/// same target and only records a short public problem, `credentials` when no
+/// Go login can be found, so the dashboard can name the sign-in step.
 fn refresh_scoped_target(cache: &CacheStore, target: &BillingTarget, force: bool) {
     refresh_scoped_target_in(cache, target, force, OpenCodePaths::from_env());
 }
@@ -532,8 +543,8 @@ fn refresh_scoped_target_in(
     };
     let Some(key) = crate::opencode::go_key(&paths) else {
         // Only reached for a visible Go row or a pane already routed to Go,
-        // so a missing login is worth saying, in the same words as every
-        // other provider without one.
+        // so a missing login is worth saying, the same way as every other
+        // provider without one.
         let _ = cache.set_refresh_problem(target.billing, Some("credentials"));
         return;
     };
@@ -862,10 +873,7 @@ fn publish_resolved(
     }
     let mut tokens = Vec::new();
     let now = CacheStore::now_unix();
-    let style = RowStyle::new(
-        cache.percent_style().unwrap_or_default(),
-        cache.brand_glyphs().unwrap_or_default(),
-    );
+    let style = sidebar_row_style(cache);
     for pane in panes.iter_mut() {
         if let Some(pane_tokens) =
             resolved_pane_tokens(cache, pane, route::resolve_with_identity(pane), now, style)?

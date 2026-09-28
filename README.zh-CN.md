@@ -55,6 +55,16 @@ Dashboard 可作为 popup 或真正可调整大小的 split pane 打开。列表
 鼠标滚轮、↑/↓、PageUp/PageDown、Home/End；按 `r` 刷新，按 `q` 或 Esc 关闭。
 刷新在后台排队执行，不会在 UI 线程读取 OpenCode 数据库。
 
+宽度不少于 72 列时，各供应商按网格对齐：短窗口的十格进度条、百分比和重置时间，
+然后是长窗口的同样三项。更窄的 pane 会把同样的数值排在一行，宽度不足时先去掉
+进度条再换行。标题行显示数据的年龄和下次刷新时间；行下方的 `▲` 指出最紧张的
+窗口，并在历史数据足够时给出按当前速度还能用多久。足够高的 split 还会显示
+Sessions（每个 agent pane 的模型、上下文、缓存、TTL）和最紧张窗口的 48 小时
+迷你图；放不下时自动省略，popup 不变。
+
+按键：`r` 刷新，`o` 在“剩余最少优先”与保存的顺序间切换（仅本 pane），`t`
+在倒计时与本地时钟之间切换重置时间（会保存），`?` 查看帮助。
+
 ## 设置
 
 按 `prefix+shift+q`，或运行：
@@ -66,8 +76,11 @@ herdr plugin action invoke open-settings --plugin herdr-agent-quota-win
 | 控件 | 可选值 | 作用 |
 | --- | --- | --- |
 | Percentages | `remaining`、`used` | 显示剩余或已用比例；颜色始终表示剩余额度。 |
+| Dashboard bars | `on`、`off` | 在 dashboard 每个窗口旁绘制十格进度条。 |
+| Reset times | `countdown`、`clock` | 显示 `3d23h` 倒计时，或窗口重置的本地时间。 |
 | Sidebar layout | `packed`、`stacked` | 相关字段同行显示，或每项独占一行。 |
 | Row gap | `0`、`1` | 控制 Agent 卡片间距。 |
+| Sidebar meter | `off`、`on` | 在侧边栏 5h/7d 标记中加入同样的进度条：`5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`。任意等宽字体均可显示。 |
 | Watch interval | 30 秒–1 小时 | Claude、Codex、Grok、Agy、Hermes 工作时轮询；Pi/OMP 由自身事件或焦点刷新。 |
 | Brand colors | `on`、`off` | 控制供应商/模型品牌色；额度严重性颜色不变。 |
 | Brand glyphs | `icon`、`unicode`、`off` | 使用品牌图标、通用字符或纯名称。 |
@@ -109,7 +122,7 @@ opencode auth list       # 确认列表中有 OpenCode Go
 QuotaDeck 使用与 OpenCode 相同的 Go 登录。OpenCode 1.x 与 2.x 均支持：OpenCode 2
 把登录和 session 存在 `opencode.db` 中，QuotaDeck 以只读方式读取；旧版本则读取
 `auth.json`。若在 Herdr 启动环境中设置了 `OPENCODE_API_KEY`，则优先使用它。没有 Go
-登录时，Go 行显示 `credentials unavailable`。侧栏只在 session 实际使用
+登录时，Go 行显示 `no Go key · run opencode auth login`。侧栏只在 session 实际使用
 `opencode-go` 模型的 pane 上显示 Go 额度；Ollama 等本地供应商没有额度，只显示
 model 和 context。
 

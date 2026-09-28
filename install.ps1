@@ -169,3 +169,4 @@ if (-not (Invoke-HerdrActionAndWait -Action 'configure')) {
 }
 
 Write-Host 'Installed. Restart already-running agent sessions once so they load the refreshed hooks.'
+Write-Host 'Run `quotadeck setup` any time to see which providers are signed in and how to sign in to the rest.'

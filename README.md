@@ -105,6 +105,48 @@ Restart already-running agent panes once. To install only a subset:
 Supported values: `all`, `claude`, `codex`, `grok`, `agy`, `opencode`, `pi`,
 `omp`, `hermes`.
 
+## Sign in to providers
+
+QuotaDeck uses the logins your agents already have. Setup finds them itself
+and lists what it found; for anything missing, run the guided check:
+
+```sh
+quotadeck setup
+```
+
+```text
+Showing quota
+  ✓ Claude       5h 87% reset 4h07m · 7d 66% reset 5d6h  (~/.claude/.credentials.json)
+  ✓ Codex        7d 80% reset 4d23h  (~/.codex/auth.json)
+
+Needs a step
+  ✗ Grok         not signed in
+                 → Run `grok login`.
+  ! Hermes       sign-in expired
+                 → The stored login was rejected. Run `hermes portal login` to sign in again.
+
+Not installed: Agy, OMP
+  Hide their rows: press s in the dashboard → Dashboard providers.
+```
+
+It refreshes every provider once, then offers to run each missing sign-in
+command for you and checks again. For OpenRouter it asks for an API key,
+with the input hidden, and saves it only to QuotaDeck's plugin config
+directory. `--no-prompt` prints the list without asking anything.
+
+| Provider | Found from | Sign in with |
+| --- | --- | --- |
+| Claude | `~/.claude/.credentials.json` or the macOS Keychain | `claude auth login` |
+| Codex | `~/.codex/auth.json` | `codex login` |
+| Grok | `~/.grok/auth.json` | `grok login` |
+| Hermes | `~/.hermes/auth.json` | `hermes portal login` |
+| OpenRouter | an API key ([see below](#hermes-and-openrouter)) | `quotadeck setup` asks for it |
+| OpenCode Go | OpenCode's stored `opencode-go` key or `OPENCODE_API_KEY` | `opencode auth login` |
+| Agy, OMP, OpenCode | the agent's own reports | use the agent once |
+
+The dashboard says the same thing in place: a row with no quota shows the
+next step, such as `not signed in · run grok login`, instead of `N/A`.
+
 ## Dashboard
 
 Press `prefix+shift+d` to open QuotaDeck as a real resizable split. You can
@@ -126,6 +168,31 @@ is taller than the pane, scroll the current list with the mouse wheel,
 Up/Down, PageUp/PageDown, Home, or End. Press `r` to refresh or `q`/Escape to
 close.
 
+In a pane at least 72 columns wide the providers line up on a grid: a
+ten-cell meter, the percentage, and the reset time for the short window, then
+the same for the long window. Narrower panes flow the same values on one line
+and drop the meters before they would wrap; dollar balances and a third window
+flow as well. The title row says how old the numbers are and when the next
+fetch is due. Below the rows, `▲` names the tightest visible window, and when
+the last hours of history give a usable slope, how long it lasts at that pace.
+A tall split also shows a Sessions section (each agent pane's model, context,
+cache and TTL, read from the same tokens the sidebar shows) and a 48-hour
+sparkline of the tightest window. Both appear only when they fit; the popup
+is unchanged.
+
+| Key | Effect |
+| --- | --- |
+| `r` | Refresh every provider now. |
+| `o` | Sort by least left, or back to the saved order, for this pane only. |
+| `t` | Reset times as a local clock time (`Thu 09:12`) or a countdown (`3d23h`). Saved. |
+| `s` / click **settings** | Open Settings. |
+| `?` | Key help. |
+| `q` / Esc | Close. |
+
+History is kept beside each provider's cached snapshot as `(time, used %)`
+pairs, at most one per minute and 720 per window. It holds no model names,
+session ids, or provider payloads.
+
 ## Settings
 
 Press `prefix+shift+q`, click **settings** in the dashboard footer, press `s`
@@ -142,8 +209,11 @@ conflict is preserved rather than overwritten; use the command above instead.
 | Control | Values | Effect |
 | --- | --- | --- |
 | Percentages | `remaining`, `used` | Changes the number; colors still mean remaining headroom. |
+| Dashboard bars | `on`, `off` | Draws a ten-cell meter beside each dashboard window. |
+| Reset times | `countdown`, `clock` | `3d23h`, or the local time the window resets. `t` in the dashboard flips it too. |
 | Sidebar layout | `packed`, `stacked` | Joins related fields or gives each field a row. |
 | Row gap | `0`, `1` | Controls spacing between Agent cards. |
+| Sidebar meter | `off`, `on` | Puts the same meter inside the sidebar's 5h/7d tokens: `5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`. Renders in any monospace font. Widest with `stacked`. |
 | Watch interval | 30s–1h | Polls Claude, Codex, Grok, Agy, and Hermes while those harnesses work; dashboard-local rows refresh while the dashboard is open. Pi/OMP refresh on their own events and focus. |
 | Brand colors | `on`, `off` | Colors provider/model names; severity colors remain. |
 | Row order | `manual`, `least left` | Uses the saved dashboard order, or puts the lowest visible remaining quota first in both the dashboard and Herdr agent sidebar. |
@@ -273,11 +343,42 @@ option stores the URL in per-user plugin config, removed on full uninstall.
 
 ## Open in your current pane
 
-On Windows, setup installs `quotadeck.cmd` in `%USERPROFILE%\.local\bin`.
-Type `quotadeck` in a Herdr shell to run the dashboard in that same pane.
-Press `q` or Esc to return to the shell. This command does not create another
-pane or print a JSON action receipt. If that directory is not on PATH, run
+Setup installs a `quotadeck` command in `~/.local/bin` (`quotadeck.cmd` in
+`%USERPROFILE%\.local\bin` on Windows). Type `quotadeck` in a Herdr shell to
+run the dashboard in that same pane. Press `q` or Esc to return to the shell.
+This command does not create another pane or print a JSON action receipt. If
+that directory is not on PATH, run `~/.local/bin/quotadeck`, or
 `& "$env:USERPROFILE\.local\bin\quotadeck.cmd"` in PowerShell.
+
+Anything after `quotadeck` goes to the plugin binary with its state and config
+directories already set:
+
+```sh
+quotadeck settings                       # the settings pane, in this pane
+quotadeck refresh --provider all --force # fetch now
+quotadeck dashboard --json               # the dashboard as data
+```
+
+## Dashboard as JSON
+
+`quotadeck dashboard --json` prints what the interactive pane would draw, as
+data, for companion apps that render QuotaDeck themselves (Shep's QuotaDeck
+pane and scrolling strip, scripts, status bars). It refreshes first, like the
+plain dashboard does, and prints one object:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `1`. Bumps only when a field changes meaning; new fields may appear anytime. |
+| `updated_at_unix` | The newest fetch among the rows, or null. |
+| `providers[]` | Every visible row in the saved order: `id`, `label`, `color`, `state` (`ok`, `stale`, `unavailable`), `reason_code` (`login`, `credentials`, `failed`, `cli`, `stale`, `none`), `reason`, `strip` (one line for a ticker), `windows[]`, `local_usage`. |
+| `windows[]` | `kind`, `label`, `amount`, `used_percent`, `remaining_percent`, `shown_percent` (in the user's style), `meter.filled`/`meter.cells`, `severity` (`normal`, `warning`, `danger`, `unknown`; always about headroom), `resets_at_unix`, `resets_in_seconds`, `resets_in`. |
+| `tightest` | The window with the least left, with `pace.percent_per_hour`, `pace.empties_in_seconds` and `pace.outlasts_reset` when history allows. |
+| `sessions[]` | Each Herdr agent pane's `harness`, `model`, `context`, `cache`, `ttl`, read from the tokens the sidebar shows. |
+
+Stale rows keep their windows and say so in `state`; rows with a login,
+credential, network or missing-CLI problem carry no windows, so old numbers
+are never presented as current. Colours are the user's row colours; a themed
+consumer should map `severity` to its own palette instead.
 
 Use `prefix+shift+d` when you deliberately want an additional split beside an
 existing agent. The `herdr plugin action invoke` commands are automation APIs;
@@ -290,8 +391,9 @@ installs with `herdr plugin install ArtMoreno/quota-deck`, run the
 configure action, and reopen your QuotaDeck pane.
 
 If a request fails, the dashboard shows `refresh failed; check connection`.
-An expired or rejected login shows `sign in again`; missing credentials or a
-missing CLI have their own messages. Old cached values are hidden while these
+An expired or rejected login shows `sign-in expired · run <command>`, and a
+provider that was never signed in shows the command that signs it in; a
+missing CLI has its own message. Old cached values are hidden while these
 messages are shown. Without a successful update for two polling intervals
 (minimum two minutes), the row shows its last-update age as stale. Sign into
 the affected harness/provider normally, then press `r` to retry. QuotaDeck does
@@ -304,11 +406,17 @@ never an image. Three sets:
 
 | Setting | What it draws | Needs |
 | --- | --- | --- |
-| `icon` (default) | Real brand logos | The `Herdr Agent Icons Max` font, which ships with [qintmb/herdr-icon-agent-ui](https://github.com/qintmb/herdr-icon-agent-ui) |
+| `icon` (default) | Real brand logos | The bundled `QuotaDeck Icons` font. Setup installs it into `~/Library/Fonts` (macOS) or `~/.local/share/fonts` (Linux); terminals that use the system font fallback (Terminal.app, iTerm2, Ghostty, Kitty, Noctty) pick it up after a restart. WezTerm and Windows terminals: see below. |
 | `unicode` | Mnemonic marks that render in any monospace font | Nothing |
 | `off` | Names alone, as upstream | Nothing |
 
-If you have not installed the icon font, select `unicode` in QuotaDeck Settings
+Other Herdr plugins install fonts that share the `U+E1A0` run (Herdr Radar's
+puts Antigravity at `U+E1B2`); QuotaDeck's marks agree with them where they
+overlap, and OpenRouter sits at `U+E500` where nothing else draws. A box in
+the OpenRouter row means no installed font has `U+E500`: run the configure
+action again, then restart the terminal.
+
+If you would rather not install the icon font, select `unicode` in QuotaDeck Settings
 (`prefix+shift+q`) or run the local installer with `-BrandGlyphs unicode` on
 Windows / `--brand-glyphs unicode` on macOS or Linux. No font install is needed
 for quota collection or the dashboard to work.
@@ -335,7 +443,11 @@ Installing a font for another terminal does not configure WezTerm's fallback lis
 3. Reload WezTerm with Ctrl+Shift+R. No Herdr or agent restart is needed.
 
 The bundled icon-only font includes Claude, Codex, OpenCode, omp, Hermes,
-Gemini/Agy, Grok, and OpenRouter. It is an MIT-licensed subset of Herdr Agent
+Gemini/Agy, Grok, and OpenRouter. OpenRouter sits at U+E500, away from Herdr
+Agent Icons Max's own run from U+E1A0: that font hands out the next slot to
+whatever logo it adds next, and a terminal that loads it first would draw
+that logo in OpenRouter's place. If OpenRouter shows an empty box while the
+other logos work, the bundled font is not in the terminal's fallback list. It is an MIT-licensed subset of Herdr Agent
 Icons Max plus the existing CC0 OpenRouter path; see
 [font license](docs/icons/FONT-LICENSE.txt). No OS-wide font installation is needed.
 QuotaDeck does not overwrite your terminal configuration during plugin updates.
@@ -343,7 +455,7 @@ QuotaDeck does not overwrite your terminal configuration during plugin updates.
 Verify selection with:
 
 ```sh
-wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e1b2
+wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e500
 ```
 
 ### Noctty: missing logos / empty boxes
@@ -353,7 +465,8 @@ wezterm ls-fonts --codepoints e1a0,e1a1,e1a2,e1a3,e1aa,e1ae,e1b1,e1b2
 2. Add this line to Noctty's `config.ghostty`:
 
 ```ini
-font-codepoint-map = U+E1A0-U+E1B2=QuotaDeck Icons
+font-codepoint-map = U+E1A0-U+E1B1=QuotaDeck Icons
+font-codepoint-map = U+E500=QuotaDeck Icons
 ```
 
 Run `noctty +perform-action reload_config` or open a new Noctty window. Keep
@@ -412,7 +525,7 @@ QuotaDeck then uses the same Go login OpenCode uses. OpenCode 1.x and 2.x both
 work: OpenCode 2 keeps logins and sessions in `opencode.db`, and QuotaDeck reads
 them there (read-only), falling back to `auth.json` on older versions.
 `OPENCODE_API_KEY`, when set where Herdr starts, takes precedence. With no Go
-login the Go row says `credentials unavailable`. Sidebar Go quota appears only
+login the Go row says `no Go key · run opencode auth login`. Sidebar Go quota appears only
 on panes whose session actually uses an `opencode-go` model; local providers
 such as Ollama have no quota and show model and context only.
 
@@ -446,6 +559,7 @@ herdr integration install omp
 | Dashboard OpenCode usage is `N/A` | Confirm OpenCode has completed a local assistant turn in the last 30 days and its data directory is readable. |
 | OMP has model/context but no quota | Run `omp usage --json --redact --provider <id>` and confirm a report exists. |
 | Herdr cannot execute OMP | Put `omp` on the server's `PATH`, or set `HERDR_AGENT_QUOTA_OMP_BIN`. |
+| A row says `not signed in` or `sign-in expired` | Run `quotadeck setup`; it lists every provider and runs the sign-in command for you. |
 | Claude shows `N/A` | Confirm Claude Code is signed in; QuotaDeck reads its local OAuth credential and falls back to a fresh statusLine snapshot. |
 | Agy shows `N/A` | Send one turn so its statusLine emits a snapshot. |
 | Rows do not appear | Run `herdr plugin action invoke configure --plugin herdr-agent-quota-win`, then restart affected panes. |

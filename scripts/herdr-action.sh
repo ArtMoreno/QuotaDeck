@@ -22,9 +22,19 @@ herdr_action_status() {
     | "$HERDR_ACTION_JSON_PARSER" parse-herdr-action-json --log-id "$1"
 }
 
+# Captured stdout of one finished log entry; empty if Herdr kept none.
+herdr_action_stdout() {
+  local output
+  output="$(herdr plugin log list --plugin "$HERDR_ACTION_PLUGIN_ID" --limit 50 2>/dev/null)" \
+    || return 1
+  printf '%s' "$output" \
+    | "$HERDR_ACTION_JSON_PARSER" parse-herdr-action-json --log-id "$1" --stdout
+}
+
 # invoke_action_and_wait <action-id>
 #
 # Returns non-zero unless the matching action log explicitly reports success.
+# The log id is left in HERDR_ACTION_LAST_LOG_ID for herdr_action_stdout.
 invoke_action_and_wait() {
   # `status` is a read-only special parameter in zsh, so this stays `state`
   # even though the scripts themselves run under bash.
@@ -38,6 +48,7 @@ invoke_action_and_wait() {
   log_id="$(printf '%s' "$output" | "$HERDR_ACTION_JSON_PARSER" parse-herdr-action-json)" \
     || return 1
   [[ -n "$log_id" ]] || return 1
+  HERDR_ACTION_LAST_LOG_ID="$log_id"
 
   while ((waited < HERDR_ACTION_TIMEOUT_SECONDS)); do
     state="$(herdr_action_status "$log_id")" || {

@@ -227,9 +227,34 @@ impl ProviderPreference {
     }
 }
 
+/// Display choices that are not about one provider.
+///
+/// Stored beside the provider rows because they are read by the same
+/// renderers and, like them, need no `configure` round trip to take effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayPreferences {
+    /// Draw a ten-cell meter beside each dashboard window.
+    pub bars: bool,
+    /// Publish the same meter inside the sidebar's 5h/7d tokens.
+    pub sidebar_meter: bool,
+    /// Show reset times as a local clock time rather than a countdown.
+    pub reset_clock: bool,
+}
+
+impl Default for DisplayPreferences {
+    fn default() -> Self {
+        Self {
+            bars: true,
+            sidebar_meter: false,
+            reset_clock: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardPreferences {
     pub providers: Vec<ProviderPreference>,
+    pub display: DisplayPreferences,
 }
 
 impl Default for DashboardPreferences {
@@ -239,6 +264,7 @@ impl Default for DashboardPreferences {
                 .into_iter()
                 .map(ProviderPreference::defaults)
                 .collect(),
+            display: DisplayPreferences::default(),
         }
     }
 }
@@ -292,6 +318,11 @@ impl DashboardPreferences {
         cache.ensure()?;
         let disk = DiskV2 {
             _version: VERSION,
+            display: DiskDisplay {
+                bars: self.display.bars,
+                sidebar_meter: self.display.sidebar_meter,
+                reset_clock: self.display.reset_clock,
+            },
             providers: self
                 .clone()
                 .normalized()
@@ -378,6 +409,11 @@ impl DashboardPreferences {
 
     fn from_v2(disk: DiskV2) -> Self {
         Self {
+            display: DisplayPreferences {
+                bars: disk.display.bars,
+                sidebar_meter: disk.display.sidebar_meter,
+                reset_clock: disk.display.reset_clock,
+            },
             providers: disk
                 .providers
                 .into_iter()
@@ -423,7 +459,10 @@ impl DashboardPreferences {
                 providers.push(preference);
             }
         }
-        Self { providers }
+        Self {
+            providers,
+            display: DisplayPreferences::default(),
+        }
     }
 }
 
@@ -470,7 +509,32 @@ struct DiskV2 {
     #[serde(rename = "version", default = "current_version")]
     _version: u8,
     #[serde(default)]
+    display: DiskDisplay,
+    #[serde(default)]
     providers: Vec<DiskProvider>,
+}
+
+/// Version 2 files written before these existed have no `display` key, and
+/// every field defaults so that key can also be partial.
+#[derive(Debug, Serialize, Deserialize)]
+struct DiskDisplay {
+    #[serde(default = "shown")]
+    bars: bool,
+    #[serde(default)]
+    sidebar_meter: bool,
+    #[serde(default)]
+    reset_clock: bool,
+}
+
+impl Default for DiskDisplay {
+    fn default() -> Self {
+        let defaults = DisplayPreferences::default();
+        Self {
+            bars: defaults.bars,
+            sidebar_meter: defaults.sidebar_meter,
+            reset_clock: defaults.reset_clock,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -570,6 +634,26 @@ mod tests {
                 DashboardField::LongReset,
             ]
         );
+    }
+
+    #[test]
+    fn display_choices_round_trip_and_default_when_the_key_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let mut preferences = DashboardPreferences::default();
+        assert!(preferences.display.bars);
+        assert!(!preferences.display.sidebar_meter);
+        assert!(!preferences.display.reset_clock);
+        preferences.display.bars = false;
+        preferences.display.sidebar_meter = true;
+        preferences.display.reset_clock = true;
+        preferences.save(&cache).unwrap();
+        let loaded = DashboardPreferences::load(&cache).unwrap();
+        assert_eq!(loaded.display, preferences.display);
+
+        fs::write(cache.root().join(FILE), br#"{"version":2,"providers":[]}"#).unwrap();
+        let legacy = DashboardPreferences::load(&cache).unwrap();
+        assert_eq!(legacy.display, DisplayPreferences::default());
     }
 
     #[test]

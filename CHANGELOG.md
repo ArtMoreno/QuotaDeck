@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `quotadeck setup`: checks every provider, lists which ones show quota and
+  where each login was found, then offers to run the missing sign-in commands
+  (`grok login`, `hermes portal login`, ...) and takes an OpenRouter key with
+  hidden input. `configure --apply` and `install.sh` print the same list.
+- Dashboard rows without quota name the next step (`not signed in · run grok
+  login`, `sign-in expired · run hermes portal login`, `not installed · hide it
+  in settings (s)`) instead of `N/A` or `credentials unavailable`.
+- Dashboard grid: in a pane at least 72 columns wide each provider shows a
+  ten-cell meter, percentage and reset time per window in fixed columns, with
+  a caption row instead of a repeated `reset`. Narrower panes flow the same
+  values on one line and drop the meters before they would wrap.
+- A tightest-window headline (`▲ Codex 7d · 14% left · resets 4d23h`) with,
+  when recent history gives a usable slope, how long the window lasts at the
+  current pace. History is recorded beside each cached snapshot as
+  `(time, used %)` pairs, bounded to one per minute and 720 per window.
+- The title row reports how old the numbers are and when the next fetch is
+  due, and says `refreshing…` while one runs.
+- Tall splits gain a Sessions section (each pane's model, context, cache and
+  TTL from the tokens the sidebar shows) and a 48-hour sparkline of the
+  tightest window, each only when it fits.
+- Dashboard keys: `o` toggles least-left order for the pane, `t` switches
+  reset times between a countdown and a local clock time, `?` shows help.
+- Settings rows `Dashboard bars`, `Reset times` and `Sidebar meter`. The
+  sidebar meter puts the same ten-cell bar inside the 5h/7d tokens
+  (`5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`) using glyphs any monospace font has.
+- `dashboard --json`: the dashboard as data (rows, windows, meters,
+  severities, reset times, states with reason codes, a one-line `strip` per
+  provider, the tightest window with its pace, and agent sessions) for
+  companion apps such as Shep that draw QuotaDeck themselves.
+- The `quotadeck` command is installed on macOS and Linux too, and forwards
+  arguments: `quotadeck settings`, `quotadeck dashboard --json`.
+
+### Fixed
+
+- The dashboard's OpenCode row reads OpenCode 2's `session_message` table, so
+  30-day usage shows again instead of `30d N/A`.
+- Setup installs the bundled `QuotaDeck Icons` font into the user's font
+  directory on macOS and Linux, so terminals that use the system font
+  fallback draw every brand mark without manual font steps. A full uninstall
+  removes it again, and only when the file is byte-for-byte QuotaDeck's.
+- The OpenRouter brand mark moved from U+E1B2 to U+E500. Herdr Agent Icons
+  Max allocates codepoints sequentially from U+E1A0, so a newer copy of that
+  font claims U+E1B2 for another logo (Herdr Radar's puts Antigravity
+  there) and a terminal that loads it first drew that logo in OpenRouter's
+  row. Reload the bundled
+  `QuotaDeckIcons-Regular.ttf` and, for Noctty, add the U+E500 mapping.
+
+### Changed
+
+- The interactive dashboard repaints in place instead of clearing the screen
+  on every change; a clear is spent only on the first frame and on resize.
+- Clock times beyond a week show the date alone (`23 Oct`).
+
 ## [1.5.0] - 2026-09-08
 
 ### Community fixes

@@ -229,4 +229,9 @@ write_plugin_pref low-quota-alert "$LOW_QUOTA_ALERT"
 printf '%s\n' '→ installing reversible sidebar and provider collectors'
 invoke_action_and_wait configure || die "configuration action failed"
 
+# The action's own report, including which providers are already signed in.
+# Best effort: a Herdr that keeps no stdout just skips it.
+herdr_action_stdout "$HERDR_ACTION_LAST_LOG_ID" 2>/dev/null || true
+
 printf '%s\n' 'Installed. Restart already-running agent sessions once so they load the refreshed hooks.'
+printf '%s\n' 'Run `quotadeck setup` any time for a guided sign-in to the providers above.'

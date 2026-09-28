@@ -301,11 +301,42 @@ option stores the URL in per-user plugin config, removed on full uninstall.
 
 ## Open in your current pane
 
-On Windows, setup installs `quotadeck.cmd` in `%USERPROFILE%\.local\bin`.
-Type `quotadeck` in a Herdr shell to run the dashboard in that same pane.
-Press `q` or Esc to return to the shell. This command does not create another
-pane or print a JSON action receipt. If that directory is not on PATH, run
+Setup installs a `quotadeck` command in `~/.local/bin` (`quotadeck.cmd` in
+`%USERPROFILE%\.local\bin` on Windows). Type `quotadeck` in a Herdr shell to
+run the dashboard in that same pane. Press `q` or Esc to return to the shell.
+This command does not create another pane or print a JSON action receipt. If
+that directory is not on PATH, run `~/.local/bin/quotadeck`, or
 `& "$env:USERPROFILE\.local\bin\quotadeck.cmd"` in PowerShell.
+
+Anything after `quotadeck` goes to the plugin binary with its state and config
+directories already set:
+
+```sh
+quotadeck settings                       # the settings pane, in this pane
+quotadeck refresh --provider all --force # fetch now
+quotadeck dashboard --json               # the dashboard as data
+```
+
+## Dashboard as JSON
+
+`quotadeck dashboard --json` prints what the interactive pane would draw, as
+data, for companion apps that render QuotaDeck themselves (Shep's QuotaDeck
+pane and scrolling strip, scripts, status bars). It refreshes first, like the
+plain dashboard does, and prints one object:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `1`. Bumps only when a field changes meaning; new fields may appear anytime. |
+| `updated_at_unix` | The newest fetch among the rows, or null. |
+| `providers[]` | Every visible row in the saved order: `id`, `label`, `color`, `state` (`ok`, `stale`, `unavailable`), `reason_code` (`login`, `credentials`, `failed`, `cli`, `stale`, `none`), `reason`, `strip` (one line for a ticker), `windows[]`, `local_usage`. |
+| `windows[]` | `kind`, `label`, `amount`, `used_percent`, `remaining_percent`, `shown_percent` (in the user's style), `meter.filled`/`meter.cells`, `severity` (`normal`, `warning`, `danger`, `unknown`; always about headroom), `resets_at_unix`, `resets_in_seconds`, `resets_in`. |
+| `tightest` | The window with the least left, with `pace.percent_per_hour`, `pace.empties_in_seconds` and `pace.outlasts_reset` when history allows. |
+| `sessions[]` | Each Herdr agent pane's `harness`, `model`, `context`, `cache`, `ttl`, read from the tokens the sidebar shows. |
+
+Stale rows keep their windows and say so in `state`; rows with a login,
+credential, network or missing-CLI problem carry no windows, so old numbers
+are never presented as current. Colours are the user's row colours; a themed
+consumer should map `severity` to its own palette instead.
 
 Use `prefix+shift+d` when you deliberately want an additional split beside an
 existing agent. The `herdr plugin action invoke` commands are automation APIs;

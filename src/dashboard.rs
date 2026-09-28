@@ -1545,6 +1545,361 @@ fn provider_color(preference: &ProviderPreference) -> Color {
     Color::Rgb { r, g, b }
 }
 
+/// The dashboard as data, for companion apps that draw QuotaDeck themselves
+/// (Shep's QuotaDeck pane and scrolling strip, scripts). Everything the
+/// interactive pane computes is here; nothing here is a terminal string a
+/// consumer would have to parse.
+///
+/// Stable contract: `schema` bumps only when a field changes meaning. New
+/// fields may appear at any time; consumers ignore what they do not know.
+#[derive(Debug, serde::Serialize)]
+pub struct DashboardJson {
+    pub schema: u8,
+    pub generated_at_unix: u64,
+    /// The newest fetch among the rows, or null when nothing has been fetched.
+    pub updated_at_unix: Option<u64>,
+    pub percent_style: &'static str,
+    pub display: DisplayJson,
+    pub tightest: Option<TightestJson>,
+    pub providers: Vec<ProviderJson>,
+    pub sessions: Vec<SessionJson>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DisplayJson {
+    pub bars: bool,
+    pub reset_clock: bool,
+    pub meter_cells: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ProviderJson {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// The user's chosen row colour, `#RRGGBB`. Themed consumers may ignore it.
+    pub color: String,
+    /// `ok`, `stale` (values present but older than two watch intervals) or
+    /// `unavailable` (no values; see `reason_code`).
+    pub state: &'static str,
+    /// `login`, `credentials`, `failed`, `cli`, `stale`, or `none` when the
+    /// plugin simply has nothing yet. Null when `state` is `ok`.
+    pub reason_code: Option<&'static str>,
+    /// The sentence the dashboard shows for that state, when it shows one.
+    pub reason: Option<String>,
+    pub fetched_at_unix: Option<u64>,
+    /// One line for a ticker or strip: `Codex 5h 64% · 7d 14%`.
+    pub strip: String,
+    pub windows: Vec<WindowJson>,
+    /// OpenCode's local 30-day usage; spend, not a limit.
+    pub local_usage: Option<LocalUsageJson>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WindowJson {
+    /// `5h`, `7d` or `30d`.
+    pub kind: &'static str,
+    /// The label the dashboard prints: usually `kind`, or `plan`, `top-up`,
+    /// `credits` for dollar balances.
+    pub label: String,
+    pub amount: Option<String>,
+    pub used_percent: f64,
+    pub remaining_percent: f64,
+    /// The percentage in the user's chosen style (`percent_style`).
+    pub shown_percent: f64,
+    pub meter: MeterJson,
+    /// `normal`, `warning`, `danger` or `unknown`; always about headroom.
+    pub severity: &'static str,
+    pub resets_at_unix: Option<u64>,
+    pub resets_in_seconds: Option<u64>,
+    /// The countdown the dashboard prints (`3d23h`, `due`).
+    pub resets_in: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MeterJson {
+    pub filled: usize,
+    pub cells: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct LocalUsageJson {
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TightestJson {
+    pub provider: &'static str,
+    pub label: &'static str,
+    pub window: String,
+    pub remaining_percent: f64,
+    pub used_percent: f64,
+    pub severity: &'static str,
+    pub resets_at_unix: Option<u64>,
+    pub resets_in_seconds: Option<u64>,
+    pub pace: Option<PaceJson>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PaceJson {
+    pub percent_per_hour: f64,
+    /// Seconds until empty at that rate; null when nothing is being used.
+    pub empties_in_seconds: Option<u64>,
+    /// True when the window resets before it would empty.
+    pub outlasts_reset: Option<bool>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionJson {
+    pub pane_id: String,
+    pub harness: &'static str,
+    /// The provider token as the sidebar shows it (`✳ Claude`), when known.
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub context: Option<String>,
+    pub cache: Option<String>,
+    pub ttl: Option<String>,
+}
+
+fn severity_id(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Normal => "normal",
+        Severity::Warning => "warning",
+        Severity::Danger => "danger",
+        Severity::Unknown => "unknown",
+    }
+}
+
+/// Refresh like the plain dashboard does, then print the view model.
+pub fn run_json() -> Result<()> {
+    let cache = CacheStore::from_env()?;
+    let preferences = DashboardPreferences::load_or_default(&cache);
+    let opencode_usage = crate::refresh::refresh_dashboard(&cache, &preferences, false)
+        .ok()
+        .flatten()
+        .flatten();
+    let panes = crate::herdr::list_agent_panes().unwrap_or_default();
+    let model = dashboard_json(
+        &cache,
+        &preferences,
+        opencode_usage,
+        &panes,
+        CacheStore::now_unix(),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&model)?);
+    Ok(())
+}
+
+fn dashboard_json(
+    cache: &CacheStore,
+    preferences: &DashboardPreferences,
+    opencode_usage: Option<LocalUsage>,
+    panes: &[AgentPane],
+    now: u64,
+) -> Result<DashboardJson> {
+    let percent = cache.percent_style().unwrap_or_default();
+    let order = cache.agent_order().unwrap_or_default();
+    let rows = dashboard_rows(cache, preferences, now, order)?;
+    let mut providers = Vec::new();
+    for row in &rows {
+        let preference = preferences.get(row.provider);
+        let mut entry = ProviderJson {
+            id: row.provider.id(),
+            label: row.provider.label(),
+            color: preference.color.clone(),
+            state: "unavailable",
+            reason_code: Some("none"),
+            reason: None,
+            fetched_at_unix: None,
+            strip: String::new(),
+            windows: Vec::new(),
+            local_usage: None,
+        };
+        match row.provider {
+            DashboardProvider::OpenCode => {
+                if let Some(usage) = opencode_usage {
+                    entry.state = "ok";
+                    entry.reason_code = None;
+                    entry.local_usage = Some(LocalUsageJson {
+                        tokens: usage.tokens,
+                        cost_usd: usage.cost_usd,
+                    });
+                }
+                entry.strip = strip_text(
+                    row.provider.label(),
+                    &opencode_segments(opencode_usage, preference)
+                        .into_iter()
+                        .map(|(text, _)| text)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            _ => {
+                let provider = row.provider.quota_provider().expect("quota provider");
+                if let Some(snapshot) = &row.snapshot {
+                    entry.fetched_at_unix = Some(snapshot.fetched_at_unix);
+                    let code = cache.refresh_problem_code(provider);
+                    let stale = code.is_none() && snapshot.refresh_warning.is_some();
+                    if let Some(code) = code {
+                        entry.reason_code = Some(code);
+                        entry.reason = snapshot.refresh_warning.clone();
+                    } else {
+                        let cells = dashboard_cells(snapshot, now, percent, preference);
+                        entry.windows = cells
+                            .iter()
+                            .map(|cell| window_json(cell, snapshot, now, percent))
+                            .collect();
+                        if stale {
+                            entry.state = "stale";
+                            entry.reason_code = Some("stale");
+                            entry.reason = snapshot.refresh_warning.clone();
+                        } else if !entry.windows.is_empty() {
+                            entry.state = "ok";
+                            entry.reason_code = None;
+                        }
+                    }
+                }
+                let segments = match &entry.reason {
+                    Some(reason) => vec![reason.clone()],
+                    None => {
+                        provider_content(provider, row.snapshot.as_ref(), now, percent, preference)
+                            .text(now, None)
+                            .into_iter()
+                            .map(|(text, _)| text)
+                            .collect()
+                    }
+                };
+                entry.strip = strip_text(row.provider.label(), &segments);
+            }
+        }
+        providers.push(entry);
+    }
+    let tightest = tightest(&rows, preferences).map(|tightest| {
+        let window = &tightest.window;
+        let reset_in = window
+            .resets_at
+            .map(|reset| reset.unix_seconds().saturating_sub(now));
+        let pace = tightest.history_identity.as_ref().and_then(|identity| {
+            let samples = cache.load_history(identity, window.kind);
+            trend::pace(&samples, now, window.remaining_percent).map(|pace| PaceJson {
+                percent_per_hour: pace.percent_per_hour,
+                empties_in_seconds: pace.empties_in_seconds,
+                outlasts_reset: match (pace.empties_in_seconds, reset_in) {
+                    (Some(empties), Some(reset)) => Some(empties >= reset),
+                    _ => None,
+                },
+            })
+        });
+        TightestJson {
+            provider: tightest.provider.id(),
+            label: tightest.provider.label(),
+            window: window.display_label().to_string(),
+            remaining_percent: window.remaining_percent,
+            used_percent: window.used_percent,
+            severity: severity_id(Severity::for_window(window, now)),
+            resets_at_unix: window.resets_at.map(|reset| reset.unix_seconds()),
+            resets_in_seconds: reset_in,
+            pace,
+        }
+    });
+    let sessions = panes
+        .iter()
+        .map(|pane| {
+            let token = |name: &str, prefixes: &[&str]| {
+                pane.tokens.get(name).and_then(|value| {
+                    let mut value = value.as_str();
+                    for prefix in prefixes {
+                        value = value.strip_prefix(prefix).unwrap_or(value);
+                    }
+                    let value = value.trim();
+                    (!value.is_empty()).then(|| value.to_string())
+                })
+            };
+            SessionJson {
+                pane_id: pane.pane_id.clone(),
+                harness: crate::settings::agent_name(pane.harness),
+                provider: token("quota_provider", &[]),
+                model: token("quota_model", &[]),
+                context: token("quota_context", &["context"]),
+                cache: token("quota_cache", &["cache"]),
+                ttl: token("quota_cache_ttl", &["ttl\u{2248}", "ttl"]),
+            }
+        })
+        .collect();
+    Ok(DashboardJson {
+        schema: 1,
+        generated_at_unix: now,
+        updated_at_unix: rows
+            .iter()
+            .filter_map(|row| row.snapshot.as_ref())
+            .filter(|snapshot| !snapshot.windows.is_empty())
+            .map(|snapshot| snapshot.fetched_at_unix)
+            .max(),
+        percent_style: percent.as_str(),
+        display: DisplayJson {
+            bars: preferences.display.bars,
+            reset_clock: preferences.display.reset_clock,
+            meter_cells: METER_CELLS,
+        },
+        tightest,
+        providers,
+        sessions,
+    })
+}
+
+fn window_json(
+    cell: &WindowCell,
+    snapshot: &ProviderSnapshot,
+    now: u64,
+    percent: PercentStyle,
+) -> WindowJson {
+    // The cell already applied the user's field choices; the window behind
+    // it supplies the raw percentages a consumer may want regardless.
+    let window = snapshot
+        .windows
+        .iter()
+        .find(|window| dashboard_label_base(window.display_label()) == cell.label)
+        .expect("a cell comes from one of the snapshot's windows");
+    let shown = percent.percent_of(window);
+    let filled = meter(shown, METER_CELLS, '#', '.')
+        .chars()
+        .filter(|glyph| *glyph == '#')
+        .count();
+    WindowJson {
+        kind: window.kind.label(),
+        label: cell.label.clone(),
+        amount: cell.amount.clone(),
+        used_percent: window.used_percent,
+        remaining_percent: window.remaining_percent,
+        shown_percent: shown,
+        meter: MeterJson {
+            filled,
+            cells: METER_CELLS,
+        },
+        severity: severity_id(cell.severity),
+        resets_at_unix: window.resets_at.map(|reset| reset.unix_seconds()),
+        resets_in_seconds: window
+            .resets_at
+            .map(|reset| reset.unix_seconds().saturating_sub(now)),
+        resets_in: window.resets_at.map(|reset| format_reset_eta(reset, now)),
+    }
+}
+
+/// `plan $14.40` → `plan`; `7d` → `7d`. The same split the cells use.
+fn dashboard_label_base(label: &str) -> &str {
+    label
+        .rsplit_once('$')
+        .map(|(base, _)| base.trim_end())
+        .unwrap_or(label)
+}
+
+/// `Codex 5h 64% reset 3h24m · 7d 14% reset 4d23h`, for a one-line strip.
+fn strip_text(label: &str, segments: &[String]) -> String {
+    if segments.is_empty() {
+        return label.to_string();
+    }
+    format!("{label} {}", segments.join(" \u{00b7} "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2288,6 +2643,128 @@ mod tests {
         assert!(!settings_link_hit(3, 20, 20, 78));
         assert!(!settings_link_hit(12, 20, 20, 78));
         assert!(!settings_link_hit(4, 19, 20, 78));
+    }
+
+    #[test]
+    fn the_json_view_model_carries_states_windows_meters_and_pace() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let now = CacheStore::now_unix();
+        for (minutes_ago, used) in [(120, 10.0), (60, 30.0), (0, 50.0)] {
+            cache
+                .save(&ProviderSnapshot::new(
+                    Provider::Codex,
+                    vec![window(WindowKind::FiveHour, used, Some(now + 4 * 3_600))],
+                    now - minutes_ago * 60,
+                ))
+                .unwrap();
+        }
+        cache
+            .save(&ProviderSnapshot::new(
+                Provider::Hermes,
+                vec![window(WindowKind::Monthly, 28.0, Some(now + 2_242_800))
+                    .with_source_window("plan $14.40", None)],
+                now,
+            ))
+            .unwrap();
+        cache
+            .set_refresh_problem(Provider::Grok, Some("login"))
+            .unwrap();
+        let pane = AgentPane {
+            pane_id: "%3".to_string(),
+            harness: crate::model::Harness::Codex,
+            session: None,
+            session_summary: String::new(),
+            topic: String::new(),
+            tokens: [("quota_model", "gpt-5.3"), ("quota_context", "context 41%")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        };
+        let model = dashboard_json(
+            &cache,
+            &DashboardPreferences::default(),
+            Some(LocalUsage {
+                tokens: 1_500,
+                cost_usd: 0.25,
+            }),
+            &[pane],
+            now,
+        )
+        .unwrap();
+        let text = serde_json::to_string(&model).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["schema"], 1);
+        assert_eq!(value["updated_at_unix"], now);
+        assert_eq!(value["display"]["meter_cells"], 10);
+        let providers = value["providers"].as_array().unwrap();
+        let find = |id: &str| {
+            providers
+                .iter()
+                .find(|provider| provider["id"] == id)
+                .unwrap()
+        };
+        let codex = find("codex");
+        assert_eq!(codex["state"], "ok");
+        assert!(codex["reason_code"].is_null());
+        assert_eq!(codex["windows"][0]["kind"], "5h");
+        assert_eq!(codex["windows"][0]["remaining_percent"], 50.0);
+        assert_eq!(codex["windows"][0]["meter"]["filled"], 5);
+        assert_eq!(codex["windows"][0]["severity"], "normal");
+        assert_eq!(codex["windows"][0]["resets_in"], "4h00m");
+        assert_eq!(codex["strip"], "Codex 5h 50% reset 4h00m");
+        let hermes = find("hermes");
+        assert_eq!(hermes["windows"][0]["label"], "plan");
+        assert!(
+            hermes["windows"][0]["amount"].is_null(),
+            "amount is off by default"
+        );
+        assert_eq!(hermes["windows"][0]["used_percent"], 28.0);
+        let grok = find("grok");
+        assert_eq!(grok["state"], "unavailable");
+        assert_eq!(grok["reason_code"], "login");
+        assert_eq!(grok["reason"], "sign in again");
+        assert_eq!(grok["strip"], "Grok sign in again");
+        let claude = find("claude");
+        assert_eq!(claude["reason_code"], "none");
+        assert_eq!(claude["strip"], "Claude 5h N/A · 7d N/A");
+        let opencode = find("opencode");
+        assert_eq!(opencode["state"], "ok");
+        assert_eq!(opencode["local_usage"]["tokens"], 1_500);
+        assert_eq!(value["tightest"]["provider"], "codex");
+        assert_eq!(value["tightest"]["pace"]["percent_per_hour"], 20.0);
+        assert_eq!(value["tightest"]["pace"]["outlasts_reset"], false);
+        assert_eq!(value["sessions"][0]["harness"], "codex");
+        assert_eq!(value["sessions"][0]["context"], "41%");
+        assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[test]
+    fn stale_rows_keep_their_values_in_json_but_say_so() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let now = CacheStore::now_unix();
+        cache
+            .save(&ProviderSnapshot::new(
+                Provider::Codex,
+                vec![window(WindowKind::Weekly, 40.0, None)],
+                now - 1_000,
+            ))
+            .unwrap();
+        let model =
+            dashboard_json(&cache, &DashboardPreferences::default(), None, &[], now).unwrap();
+        let codex = model
+            .providers
+            .iter()
+            .find(|provider| provider.id == "codex")
+            .unwrap();
+        assert_eq!(codex.state, "stale");
+        assert_eq!(codex.reason_code, Some("stale"));
+        assert_eq!(codex.windows.len(), 1);
+        assert!(
+            model.tightest.is_none(),
+            "a stale window is not the tightest"
+        );
     }
 
     #[test]

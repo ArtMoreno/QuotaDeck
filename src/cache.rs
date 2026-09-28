@@ -118,15 +118,23 @@ impl CacheStore {
     }
 
     pub fn refresh_problem(&self, provider: Provider) -> Option<&'static str> {
+        Some(match self.refresh_problem_code(provider)? {
+            "login" => "sign in again",
+            "credentials" => "credentials unavailable",
+            "failed" => "refresh failed; check connection",
+            "cli" => "CLI not found; check installation",
+            _ => return None,
+        })
+    }
+
+    /// The fixed public code behind [`Self::refresh_problem`], for machine
+    /// readers. Anything that is not one of the known codes reads as none.
+    pub fn refresh_problem_code(&self, provider: Provider) -> Option<&'static str> {
         let value =
             fs::read_to_string(self.root.join(format!("{}.problem", provider.source()))).ok()?;
-        match value.as_str() {
-            "login" => Some("sign in again"),
-            "credentials" => Some("credentials unavailable"),
-            "failed" => Some("refresh failed; check connection"),
-            "cli" => Some("CLI not found; check installation"),
-            _ => None,
-        }
+        ["login", "credentials", "failed", "cli"]
+            .into_iter()
+            .find(|code| *code == value.as_str())
     }
 
     pub fn ensure(&self) -> Result<()> {

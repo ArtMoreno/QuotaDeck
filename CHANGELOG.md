@@ -26,6 +26,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Settings rows `Dashboard bars`, `Reset times` and `Sidebar meter`. The
   sidebar meter puts the same ten-cell bar inside the 5h/7d tokens
   (`5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`) using glyphs any monospace font has.
+- `dashboard --json`: the dashboard as data (rows, windows, meters,
+  severities, reset times, states with reason codes, a one-line `strip` per
+  provider, the tightest window with its pace, and agent sessions) for
+  companion apps such as Shep that draw QuotaDeck themselves.
+- The `quotadeck` command is installed on macOS and Linux too, and forwards
+  arguments: `quotadeck settings`, `quotadeck dashboard --json`.
 
 ### Changed
 

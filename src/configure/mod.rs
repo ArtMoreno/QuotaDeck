@@ -3,7 +3,6 @@ pub mod claude;
 pub mod grok;
 pub mod herdr;
 mod integration;
-#[cfg(windows)]
 mod launcher;
 mod statusline;
 
@@ -65,7 +64,6 @@ pub fn run(
         }
         herdr::uninstall(agents, full)?;
         if full {
-            #[cfg(windows)]
             launcher::uninstall()?;
             // Herdr keeps this view until something clears it, so an uninstall
             // that skipped it would leave the panel sorted by a token this
@@ -157,7 +155,6 @@ pub fn run(
             grok::apply()?;
         }
         integration::report_missing(agents);
-        #[cfg(windows)]
         launcher::apply()?;
         cache.clear_settings_apply_pending()?;
     } else {

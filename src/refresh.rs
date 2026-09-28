@@ -507,11 +507,19 @@ fn refresh_omp_target(
 
 /// Refresh a billing target that has no 1:1 harness collector.
 ///
-/// Failure is deliberately silent: the pane keeps the last good snapshot for
-/// this same target rather than being cleared, and a missing key is a normal
-/// state (the user may not have a Go subscription) rather than an error worth
-/// surfacing on every event.
+/// A failure never clears the pane: it keeps the last good snapshot for this
+/// same target and only records a short public problem, "credentials
+/// unavailable" when no Go login can be found.
 fn refresh_scoped_target(cache: &CacheStore, target: &BillingTarget, force: bool) {
+    refresh_scoped_target_in(cache, target, force, OpenCodePaths::from_env());
+}
+
+fn refresh_scoped_target_in(
+    cache: &CacheStore,
+    target: &BillingTarget,
+    force: bool,
+    paths: Option<OpenCodePaths>,
+) {
     let now = CacheStore::now_unix();
     if should_skip_fetch(cache, target.billing, force, now).unwrap_or(true) {
         return;
@@ -519,10 +527,14 @@ fn refresh_scoped_target(cache: &CacheStore, target: &BillingTarget, force: bool
     let Ok(Some(_lease)) = cache.try_lock_target_refresh(target) else {
         return;
     };
-    let Some(paths) = OpenCodePaths::from_env() else {
+    let Some(paths) = paths else {
         return;
     };
     let Some(key) = crate::opencode::go_key(&paths) else {
+        // Only reached for a visible Go row or a pane already routed to Go,
+        // so a missing login is worth saying, in the same words as every
+        // other provider without one.
+        let _ = cache.set_refresh_problem(target.billing, Some("credentials"));
         return;
     };
     // Marked before the request so a failing endpoint cannot be retried on
@@ -1074,6 +1086,38 @@ mod tests {
             .iter()
             .map(|(provider, headroom)| ((*provider).to_string(), *headroom))
             .collect()
+    }
+
+    #[test]
+    fn a_missing_go_login_is_reported_as_unavailable_credentials() {
+        if crate::opencode::env_go_key_present() {
+            // A real key in this environment would send a live request.
+            return;
+        }
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path().join("cache"));
+        let store = directory.path().join("opencode");
+        std::fs::create_dir_all(&store).unwrap();
+        crate::opencode::write_fixture_credentials_v2(
+            &store.join("opencode.db"),
+            &[(
+                "anthropic",
+                r#"{"type":"key","key":"placeholder"}"#,
+                Some(true),
+                1,
+            )],
+        )
+        .unwrap();
+        refresh_scoped_target_in(
+            &cache,
+            &BillingTarget::opencode_go(),
+            true,
+            Some(OpenCodePaths::from_dir(&store)),
+        );
+        assert_eq!(
+            cache.refresh_problem(Provider::OpenCodeGo),
+            Some("credentials unavailable")
+        );
     }
 
     #[test]

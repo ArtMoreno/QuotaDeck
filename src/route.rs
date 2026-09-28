@@ -674,9 +674,23 @@ mod tests {
         let directory = tempdir().unwrap();
         let data = directory.path().join("opencode");
         fs::create_dir_all(&data).unwrap();
-        fs::write(
-            data.join("auth.json"),
-            r#"{"opencode-go":{"type":"api","key":"placeholder"},"anthropic":{"type":"api","key":"placeholder"}}"#,
+        // OpenCode 2 keeps logins in its database; there is no auth.json.
+        crate::opencode::write_fixture_credentials_v2(
+            &data.join("opencode.db"),
+            &[
+                (
+                    "opencode-go",
+                    r#"{"type":"key","key":"placeholder"}"#,
+                    Some(true),
+                    1,
+                ),
+                (
+                    "anthropic",
+                    r#"{"type":"key","key":"placeholder"}"#,
+                    Some(true),
+                    1,
+                ),
+            ],
         )
         .unwrap();
         crate::opencode::write_fixture_db_v2(

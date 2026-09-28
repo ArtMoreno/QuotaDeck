@@ -23,6 +23,13 @@ const ASSISTANT_DATA_FOR_SESSION_V2: &str = "SELECT data FROM session_message \
 /// their shape.
 const ASSISTANT_DATA_SINCE_V2: &str =
     "SELECT data FROM session_message WHERE type = 'assistant' AND time_created >= ?1";
+/// OpenCode 2 keeps logins in `credential`, one row per saved login, keyed by
+/// provider id. Rows come back in OpenCode's own order: the active login
+/// first, then the newest.
+const CREDENTIALS_V2: &str = "SELECT integration_id, value FROM credential \
+     WHERE integration_id IS NOT NULL ORDER BY active DESC, time_created DESC, id DESC";
+const GO_CREDENTIAL_V2: &str = "SELECT value FROM credential WHERE integration_id = 'opencode-go' \
+     ORDER BY active DESC, time_created DESC, id DESC LIMIT 1";
 const MAX_MODELS_BYTES: u64 = 8 * 1024 * 1024;
 const THIRTY_DAYS_SECONDS: u64 = 30 * 24 * 60 * 60;
 
@@ -159,7 +166,8 @@ pub fn env_go_key_present() -> bool {
 /// [`AuthMap`] deliberately records only whether a secret exists, so the value
 /// never travels with the parsed credential map. This reads it on demand and
 /// hands back an owned string the caller drops as soon as the request is made.
-/// `OPENCODE_API_KEY` wins, matching how OpenCode itself resolves the key.
+/// `OPENCODE_API_KEY` wins; otherwise the key comes from OpenCode 2's
+/// `credential` table when the store has one, and from `auth.json` when not.
 pub fn go_key(paths: &OpenCodePaths) -> Option<String> {
     if let Some(key) = std::env::var("OPENCODE_API_KEY")
         .ok()
@@ -167,6 +175,16 @@ pub fn go_key(paths: &OpenCodePaths) -> Option<String> {
         .filter(|key| !key.is_empty())
     {
         return Some(key);
+    }
+    if let Some(connection) = credential_store(&paths.db) {
+        let value: String = connection
+            .query_row(GO_CREDENTIAL_V2, [], |row| row.get(0))
+            .ok()?;
+        let value: Value = serde_json::from_str(&value).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("key") {
+            return None;
+        }
+        return string_field(&value, "key");
     }
     let bytes = fs::read(&paths.auth).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
@@ -179,8 +197,62 @@ pub fn go_key(paths: &OpenCodePaths) -> Option<String> {
     (!key.is_empty()).then_some(key)
 }
 
+/// Which providers have a saved OpenCode login, and of what kind.
+///
+/// OpenCode 2 imports `auth.json` into its database once and then keeps every
+/// login there, so when the store has a `credential` table that table is the
+/// only source; a leftover `auth.json` is stale.
 pub fn read_auth(paths: &OpenCodePaths) -> Result<AuthMap, AuthReadError> {
-    read_auth_file(&paths.auth)
+    match credential_store(&paths.db) {
+        Some(connection) => read_auth_db(&connection),
+        None => read_auth_file(&paths.auth),
+    }
+}
+
+/// OpenCode 2's store, opened read-only, when it carries a `credential` table.
+fn credential_store(path: &Path) -> Option<Connection> {
+    let connection = open_readonly(path).ok()?;
+    table_exists(&connection, "credential")
+        .ok()?
+        .then_some(connection)
+}
+
+fn read_auth_db(connection: &Connection) -> Result<AuthMap, AuthReadError> {
+    let mut statement = connection
+        .prepare(CREDENTIALS_V2)
+        .map_err(|_| AuthReadError)?;
+    let mut rows = statement.query([]).map_err(|_| AuthReadError)?;
+    let mut entries = BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(row) = rows.next().map_err(|_| AuthReadError)? {
+        let provider_id: String = row.get(0).map_err(|_| AuthReadError)?;
+        let provider_id = provider_id.to_ascii_lowercase();
+        // Only the first row per provider is the login OpenCode uses; an
+        // unreadable one is not replaced by an older login it has set aside.
+        if !seen.insert(provider_id.clone()) {
+            continue;
+        }
+        let value: String = row.get(1).map_err(|_| AuthReadError)?;
+        let kind = serde_json::from_str::<Value>(&value)
+            .ok()
+            .and_then(|value| credential_kind_v2(&value));
+        if let Some(kind) = kind {
+            entries.insert(provider_id, kind);
+        }
+    }
+    Ok(AuthMap { entries })
+}
+
+/// An OpenCode 2 credential value: `{"type":"key","key":…}` for API keys
+/// (including imported well-known tokens) or `{"type":"oauth",…}`.
+fn credential_kind_v2(value: &Value) -> Option<CredentialKind> {
+    match value.get("type").and_then(Value::as_str)? {
+        "key" => Some(CredentialKind::Api {
+            has_secret: string_field(value, "key").is_some(),
+        }),
+        "oauth" => Some(CredentialKind::Oauth),
+        _ => None,
+    }
 }
 
 pub fn lookup_session(paths: &OpenCodePaths, session_id: &str) -> SessionLookup {
@@ -648,6 +720,37 @@ pub(crate) fn write_fixture_db_v2(
     Ok(())
 }
 
+/// OpenCode 2 saved logins. Rows are `(provider id, value JSON, active,
+/// time_created)`; the table is created if the store does not have it yet.
+#[cfg(test)]
+pub(crate) fn write_fixture_credentials_v2(
+    path: &Path,
+    rows: &[(&str, &str, Option<bool>, i64)],
+) -> rusqlite::Result<()> {
+    let connection = Connection::open(path)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS credential (
+            id TEXT PRIMARY KEY,
+            integration_id TEXT,
+            label TEXT NOT NULL,
+            value TEXT NOT NULL,
+            connector_id TEXT,
+            method_id TEXT,
+            active INTEGER,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL
+        );",
+    )?;
+    for (index, (provider_id, value, active, time_created)) in rows.iter().enumerate() {
+        connection.execute(
+            "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated)
+             VALUES (?1, ?2, 'default', ?3, ?4, ?5, ?5)",
+            rusqlite::params![format!("cred_{index}"), *provider_id, *value, *active, *time_created],
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,6 +829,102 @@ mod tests {
         assert_eq!(go_key(&paths), None);
         fs::write(&paths.auth, br#"{"opencode-go":{"type":"api","key":"  "}}"#).unwrap();
         assert_eq!(go_key(&paths), None);
+    }
+
+    #[test]
+    fn opencode_2_logins_are_read_from_the_credential_table() {
+        let directory = tempdir().unwrap();
+        let paths = OpenCodePaths::from_dir(directory.path());
+        // A leftover file from before the upgrade must not win over the store.
+        fs::write(
+            &paths.auth,
+            br#"{"opencode-go":{"type":"api","key":"stale_go"},"openai":{"type":"api","key":"x"}}"#,
+        )
+        .unwrap();
+        write_fixture_credentials_v2(
+            &paths.db,
+            &[
+                // An older Go key set aside, and the one OpenCode uses.
+                ("opencode-go", r#"{"type":"key","key":"old_go"}"#, Some(false), 5),
+                ("opencode-go", r#"{"type":"key","key":"go_secret"}"#, Some(true), 1),
+                // Imported from auth.json: no active flag, newest wins.
+                ("anthropic", r#"{"type":"key","key":"  "}"#, None, 1),
+                ("anthropic", r#"{"type":"key","key":"placeholder"}"#, None, 2),
+                (
+                    "github-copilot",
+                    r#"{"type":"oauth","methodID":"device","refresh":"r","access":"a","expires":1}"#,
+                    Some(true),
+                    1,
+                ),
+                ("xai", r#"{"type":"key","key":""}"#, Some(true), 1),
+                ("broken", "not json", Some(true), 2),
+                ("broken", r#"{"type":"key","key":"older"}"#, Some(false), 1),
+            ],
+        )
+        .unwrap();
+        let before = fs::read(&paths.db).unwrap();
+
+        let auth = read_auth(&paths).unwrap();
+        assert_eq!(
+            auth.get("opencode-go"),
+            Some(CredentialKind::Api { has_secret: true })
+        );
+        assert_eq!(
+            auth.get("anthropic"),
+            Some(CredentialKind::Api { has_secret: true })
+        );
+        assert_eq!(auth.get("github-copilot"), Some(CredentialKind::Oauth));
+        assert_eq!(
+            auth.get("xai"),
+            Some(CredentialKind::Api { has_secret: false })
+        );
+        assert_eq!(auth.get("broken"), None);
+        assert_eq!(auth.get("openai"), None, "auth.json is not read");
+        assert!(!format!("{auth:?}").contains("go_secret"));
+        assert_eq!(go_key(&paths).as_deref(), Some("go_secret"));
+        assert_eq!(
+            fs::read(&paths.db).unwrap(),
+            before,
+            "the store is read-only"
+        );
+    }
+
+    #[test]
+    fn opencode_2_without_a_go_login_has_no_go_key() {
+        let directory = tempdir().unwrap();
+        let paths = OpenCodePaths::from_dir(directory.path());
+        fs::write(
+            &paths.auth,
+            br#"{"opencode-go":{"type":"api","key":"stale_go"}}"#,
+        )
+        .unwrap();
+        write_fixture_credentials_v2(&paths.db, &[]).unwrap();
+        assert_eq!(read_auth(&paths), Ok(AuthMap::default()));
+        assert_eq!(go_key(&paths), None);
+    }
+
+    #[test]
+    fn a_store_without_a_credential_table_keeps_reading_auth_json() {
+        let directory = tempdir().unwrap();
+        let paths = OpenCodePaths::from_dir(directory.path());
+        write_fixture_db(
+            &paths.db,
+            &[(
+                "ses_go",
+                r#"{"role":"assistant","providerID":"opencode-go"}"#,
+            )],
+        )
+        .unwrap();
+        fs::write(
+            &paths.auth,
+            br#"{"opencode-go":{"type":"api","key":"go_secret"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_auth(&paths).unwrap().get("opencode-go"),
+            Some(CredentialKind::Api { has_secret: true })
+        );
+        assert_eq!(go_key(&paths).as_deref(), Some("go_secret"));
     }
 
     #[test]

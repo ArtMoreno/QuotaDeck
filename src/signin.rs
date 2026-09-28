@@ -473,7 +473,13 @@ pub fn render(checks: &[Check]) -> String {
         .collect();
     let hidden_unused: Vec<&Check> = checks
         .iter()
-        .filter(needs_step)
+        .filter(|check| check.status == Status::SignedOut && !check.shown)
+        .collect();
+    // Hidden rows are never refreshed, so a login there has no quota yet;
+    // that is not "not set up", it only needs the row turned on.
+    let hidden_signed_in: Vec<&Check> = checks
+        .iter()
+        .filter(|check| matches!(check.status, Status::SignedIn | Status::Expired))
         .filter(|check| !check.shown)
         .collect();
     let missing: Vec<&Check> = checks
@@ -558,6 +564,14 @@ pub fn render(checks: &[Check]) -> String {
             .map(|check| check.provider.label())
             .collect();
         out.push_str(&format!("Hidden and not set up: {}\n\n", names.join(", ")));
+    }
+    if !hidden_signed_in.is_empty() {
+        let names: Vec<&str> = hidden_signed_in
+            .iter()
+            .map(|check| check.provider.label())
+            .collect();
+        out.push_str(&format!("Signed in but hidden: {}\n", names.join(", ")));
+        out.push_str("  Show their rows: press s in the dashboard → Dashboard providers.\n\n");
     }
     if !missing.is_empty() {
         let names: Vec<&str> = missing.iter().map(|check| check.provider.label()).collect();
@@ -877,7 +891,19 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("opencode auth login"), "{text}");
+        assert!(!text.contains("Signed in but hidden"), "{text}");
         assert!(text.contains("1 of 3 providers showing quota."), "{text}");
+
+        let text = render(&[check(
+            P::OpenCodeGo,
+            Status::SignedIn,
+            Some("OpenCode auth"),
+            None,
+            false,
+        )]);
+        assert!(text.contains("Signed in but hidden: OpenCode Go"), "{text}");
+        assert!(text.contains("Show their rows: press s"), "{text}");
+        assert!(!text.contains("not set up"), "{text}");
 
         let mut failed = check(
             P::Claude,

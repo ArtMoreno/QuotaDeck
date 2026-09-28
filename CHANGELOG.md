@@ -35,10 +35,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Setup installs the bundled `QuotaDeck Icons` font into the user's font
+  directory on macOS and Linux, so terminals that use the system font
+  fallback draw every brand mark without manual font steps. A full uninstall
+  removes it again, and only when the file is byte-for-byte QuotaDeck's.
 - The OpenRouter brand mark moved from U+E1B2 to U+E500. Herdr Agent Icons
   Max allocates codepoints sequentially from U+E1A0, so a newer copy of that
-  font claims U+E1B2 for another logo and a terminal that loads it first
-  drew that logo in OpenRouter's row. Reload the bundled
+  font claims U+E1B2 for another logo (Herdr Radar's puts Antigravity
+  there) and a terminal that loads it first drew that logo in OpenRouter's
+  row. Reload the bundled
   `QuotaDeckIcons-Regular.ttf` and, for Noctty, add the U+E500 mapping.
 
 ### Changed

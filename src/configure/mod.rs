@@ -1,5 +1,6 @@
 pub mod agy;
 pub mod claude;
+mod font;
 pub mod grok;
 pub mod herdr;
 mod integration;
@@ -65,6 +66,7 @@ pub fn run(
         herdr::uninstall(agents, full)?;
         if full {
             launcher::uninstall()?;
+            font::uninstall()?;
             // Herdr keeps this view until something clears it, so an uninstall
             // that skipped it would leave the panel sorted by a token this
             // plugin no longer publishes.
@@ -156,6 +158,7 @@ pub fn run(
         }
         integration::report_missing(agents);
         launcher::apply()?;
+        font::apply(glyphs)?;
         cache.clear_settings_apply_pending()?;
     } else {
         let cache = CacheStore::from_env().ok();

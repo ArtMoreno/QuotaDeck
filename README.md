@@ -363,11 +363,17 @@ never an image. Three sets:
 
 | Setting | What it draws | Needs |
 | --- | --- | --- |
-| `icon` (default) | Real brand logos | The `Herdr Agent Icons Max` font, which ships with [qintmb/herdr-icon-agent-ui](https://github.com/qintmb/herdr-icon-agent-ui) |
+| `icon` (default) | Real brand logos | The bundled `QuotaDeck Icons` font. Setup installs it into `~/Library/Fonts` (macOS) or `~/.local/share/fonts` (Linux); terminals that use the system font fallback (Terminal.app, iTerm2, Ghostty, Kitty, Noctty) pick it up after a restart. WezTerm and Windows terminals: see below. |
 | `unicode` | Mnemonic marks that render in any monospace font | Nothing |
 | `off` | Names alone, as upstream | Nothing |
 
-If you have not installed the icon font, select `unicode` in QuotaDeck Settings
+Other Herdr plugins install fonts that share the `U+E1A0` run (Herdr Radar's
+puts Antigravity at `U+E1B2`); QuotaDeck's marks agree with them where they
+overlap, and OpenRouter sits at `U+E500` where nothing else draws. A box in
+the OpenRouter row means no installed font has `U+E500`: run the configure
+action again, then restart the terminal.
+
+If you would rather not install the icon font, select `unicode` in QuotaDeck Settings
 (`prefix+shift+q`) or run the local installer with `-BrandGlyphs unicode` on
 Windows / `--brand-glyphs unicode` on macOS or Linux. No font install is needed
 for quota collection or the dashboard to work.

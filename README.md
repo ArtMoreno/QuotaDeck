@@ -126,6 +126,31 @@ is taller than the pane, scroll the current list with the mouse wheel,
 Up/Down, PageUp/PageDown, Home, or End. Press `r` to refresh or `q`/Escape to
 close.
 
+In a pane at least 72 columns wide the providers line up on a grid: a
+ten-cell meter, the percentage, and the reset time for the short window, then
+the same for the long window. Narrower panes flow the same values on one line
+and drop the meters before they would wrap; dollar balances and a third window
+flow as well. The title row says how old the numbers are and when the next
+fetch is due. Below the rows, `▲` names the tightest visible window, and when
+the last hours of history give a usable slope, how long it lasts at that pace.
+A tall split also shows a Sessions section (each agent pane's model, context,
+cache and TTL, read from the same tokens the sidebar shows) and a 48-hour
+sparkline of the tightest window. Both appear only when they fit; the popup
+is unchanged.
+
+| Key | Effect |
+| --- | --- |
+| `r` | Refresh every provider now. |
+| `o` | Sort by least left, or back to the saved order, for this pane only. |
+| `t` | Reset times as a local clock time (`Thu 09:12`) or a countdown (`3d23h`). Saved. |
+| `s` / click **settings** | Open Settings. |
+| `?` | Key help. |
+| `q` / Esc | Close. |
+
+History is kept beside each provider's cached snapshot as `(time, used %)`
+pairs, at most one per minute and 720 per window. It holds no model names,
+session ids, or provider payloads.
+
 ## Settings
 
 Press `prefix+shift+q`, click **settings** in the dashboard footer, press `s`
@@ -142,8 +167,11 @@ conflict is preserved rather than overwritten; use the command above instead.
 | Control | Values | Effect |
 | --- | --- | --- |
 | Percentages | `remaining`, `used` | Changes the number; colors still mean remaining headroom. |
+| Dashboard bars | `on`, `off` | Draws a ten-cell meter beside each dashboard window. |
+| Reset times | `countdown`, `clock` | `3d23h`, or the local time the window resets. `t` in the dashboard flips it too. |
 | Sidebar layout | `packed`, `stacked` | Joins related fields or gives each field a row. |
 | Row gap | `0`, `1` | Controls spacing between Agent cards. |
+| Sidebar meter | `off`, `on` | Puts the same meter inside the sidebar's 5h/7d tokens: `5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`. Renders in any monospace font. Widest with `stacked`. |
 | Watch interval | 30s–1h | Polls Claude, Codex, Grok, Agy, and Hermes while those harnesses work; dashboard-local rows refresh while the dashboard is open. Pi/OMP refresh on their own events and focus. |
 | Brand colors | `on`, `off` | Colors provider/model names; severity colors remain. |
 | Row order | `manual`, `least left` | Uses the saved dashboard order, or puts the lowest visible remaining quota first in both the dashboard and Herdr agent sidebar. |

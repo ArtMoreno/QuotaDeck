@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Dashboard grid: in a pane at least 72 columns wide each provider shows a
+  ten-cell meter, percentage and reset time per window in fixed columns, with
+  a caption row instead of a repeated `reset`. Narrower panes flow the same
+  values on one line and drop the meters before they would wrap.
+- A tightest-window headline (`▲ Codex 7d · 14% left · resets 4d23h`) with,
+  when recent history gives a usable slope, how long the window lasts at the
+  current pace. History is recorded beside each cached snapshot as
+  `(time, used %)` pairs, bounded to one per minute and 720 per window.
+- The title row reports how old the numbers are and when the next fetch is
+  due, and says `refreshing…` while one runs.
+- Tall splits gain a Sessions section (each pane's model, context, cache and
+  TTL from the tokens the sidebar shows) and a 48-hour sparkline of the
+  tightest window, each only when it fits.
+- Dashboard keys: `o` toggles least-left order for the pane, `t` switches
+  reset times between a countdown and a local clock time, `?` shows help.
+- Settings rows `Dashboard bars`, `Reset times` and `Sidebar meter`. The
+  sidebar meter puts the same ten-cell bar inside the 5h/7d tokens
+  (`5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`) using glyphs any monospace font has.
+
+### Changed
+
+- The interactive dashboard repaints in place instead of clearing the screen
+  on every change; a clear is spent only on the first frame and on resize.
+- Clock times beyond a week show the date alone (`23 Oct`).
+
 ## [1.5.0] - 2026-09-08
 
 ### Community fixes

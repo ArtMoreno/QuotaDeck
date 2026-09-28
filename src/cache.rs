@@ -14,6 +14,9 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// One recorded observation of a quota window: `(fetched_at_unix, used_percent)`.
+pub type HistorySample = (u64, f64);
+
 pub const DEFAULT_WATCH_INTERVAL_SECONDS: u64 = 60;
 pub const MIN_WATCH_INTERVAL_SECONDS: u64 = 30;
 pub const MAX_WATCH_INTERVAL_SECONDS: u64 = 60 * 60;
@@ -32,6 +35,12 @@ const SETTINGS_APPLY_PENDING_FILE: &str = "settings-apply.pending";
 /// crossing notifies once instead of on every refresh.
 const LOW_QUOTA_ALERTED_FILE: &str = "low-quota-alerted";
 const MAX_STATUSLINE_SESSIONS: usize = 128;
+/// Enough history for a 48-hour sparkline at the minimum watch interval,
+/// without ever growing a file beyond a few tens of kilobytes.
+const HISTORY_MAX_SAMPLES: usize = 720;
+/// StatusLine hooks can write several times a minute; the trend does not
+/// need that resolution and the file must not churn for it.
+const HISTORY_MIN_GAP_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct CacheStore {
@@ -202,7 +211,11 @@ impl CacheStore {
         let mut snapshot = snapshot.clone();
         snapshot.protect_private_fields();
         let bytes = serde_json::to_vec_pretty(&snapshot).context("serialize quota snapshot")?;
-        Self::atomic_replace(&destination, &temporary, bytes)
+        Self::atomic_replace(&destination, &temporary, bytes)?;
+        // Trend data is a convenience; a failure to record it must not turn
+        // a successful fetch into a failed refresh.
+        let _ = self.record_history(&identity, &snapshot);
+        Ok(())
     }
 
     pub fn should_debounce_target(
@@ -240,7 +253,74 @@ impl CacheStore {
         let mut snapshot = snapshot.clone();
         snapshot.protect_private_fields();
         let bytes = serde_json::to_vec_pretty(&snapshot).context("serialize quota snapshot")?;
-        Self::atomic_replace(&destination, &temporary, bytes)
+        Self::atomic_replace(&destination, &temporary, bytes)?;
+        let _ = self.record_history(snapshot.provider.source(), &snapshot);
+        Ok(())
+    }
+
+    /// The history identity of a canonical collector's snapshot file.
+    pub fn history_identity(provider: Provider) -> &'static str {
+        provider.source()
+    }
+
+    /// Append each account window's `(fetched_at, used_percent)` to the
+    /// trend file beside the snapshot. Only percentages and timestamps are
+    /// stored: no model names, session ids, or provider payloads.
+    ///
+    /// A sample within [`HISTORY_MIN_GAP_SECONDS`] of the previous one
+    /// replaces it, and each window keeps at most
+    /// [`HISTORY_MAX_SAMPLES`], so the file is bounded however often the
+    /// collectors run.
+    pub fn record_history(&self, identity: &str, snapshot: &ProviderSnapshot) -> Result<()> {
+        if snapshot.windows.is_empty() {
+            return Ok(());
+        }
+        let path = self.history_path(identity);
+        let mut history: BTreeMap<String, Vec<HistorySample>> = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let mut changed = false;
+        for window in &snapshot.windows {
+            let samples = history.entry(window.kind.label().to_string()).or_default();
+            let sample = (snapshot.fetched_at_unix, window.used_percent);
+            match samples.last() {
+                Some(last) if last.0 >= sample.0 => continue,
+                Some(last) if sample.0 - last.0 < HISTORY_MIN_GAP_SECONDS => {
+                    *samples.last_mut().expect("checked above") = sample;
+                }
+                _ => samples.push(sample),
+            }
+            if samples.len() > HISTORY_MAX_SAMPLES {
+                let excess = samples.len() - HISTORY_MAX_SAMPLES;
+                samples.drain(..excess);
+            }
+            changed = true;
+        }
+        if !changed {
+            return Ok(());
+        }
+        let temporary = self
+            .root
+            .join(format!(".{identity}.history.{}.tmp", std::process::id()));
+        let bytes = serde_json::to_vec(&history).context("serialize quota history")?;
+        Self::atomic_replace(&path, &temporary, bytes)
+    }
+
+    /// The recorded `(fetched_at, used_percent)` samples of one window,
+    /// oldest first. Missing or unreadable history is simply empty.
+    pub fn load_history(&self, identity: &str, kind: WindowKind) -> Vec<HistorySample> {
+        fs::read(self.history_path(identity))
+            .ok()
+            .and_then(|bytes| {
+                serde_json::from_slice::<BTreeMap<String, Vec<HistorySample>>>(&bytes).ok()
+            })
+            .and_then(|mut history| history.remove(kind.label()))
+            .unwrap_or_default()
+    }
+
+    fn history_path(&self, identity: &str) -> PathBuf {
+        self.root.join(format!("{identity}.history.json"))
     }
 
     /// Keep provider-local diagnostics when a successful quota refresh cannot
@@ -2103,6 +2183,52 @@ mod tests {
         assert!(saved
             .model_for_session(Some(&format!("session-{}", MAX_STATUSLINE_SESSIONS + 7)))
             .is_some());
+    }
+
+    #[test]
+    fn saves_record_bounded_history_of_used_percent_per_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let window = |kind, used, at| {
+            let mut snapshot = ProviderSnapshot::new(Provider::Codex, vec![], at);
+            snapshot.windows = vec![UsageWindow::new(kind, used, None).unwrap()];
+            snapshot
+        };
+        cache
+            .save(&window(WindowKind::FiveHour, 10.0, 1_000))
+            .unwrap();
+        // Within a minute of the last sample: replaces it rather than adding.
+        cache
+            .save(&window(WindowKind::FiveHour, 11.0, 1_030))
+            .unwrap();
+        cache
+            .save(&window(WindowKind::FiveHour, 12.0, 1_100))
+            .unwrap();
+        // Older than the last sample: ignored, history stays monotonic.
+        cache
+            .save(&window(WindowKind::FiveHour, 99.0, 900))
+            .unwrap();
+        let identity = CacheStore::history_identity(Provider::Codex);
+        assert_eq!(
+            cache.load_history(identity, WindowKind::FiveHour),
+            vec![(1_030, 11.0), (1_100, 12.0)]
+        );
+        assert!(cache.load_history(identity, WindowKind::Weekly).is_empty());
+        assert!(cache
+            .load_history("never-seen", WindowKind::FiveHour)
+            .is_empty());
+
+        for index in 0..(HISTORY_MAX_SAMPLES as u64 + 50) {
+            cache
+                .save(&window(WindowKind::Weekly, 1.0, 10_000 + index * 60))
+                .unwrap();
+        }
+        let weekly = cache.load_history(identity, WindowKind::Weekly);
+        assert_eq!(weekly.len(), HISTORY_MAX_SAMPLES);
+        assert_eq!(weekly.first().unwrap().0, 10_000 + 50 * 60);
+        let text = fs::read_to_string(cache.root().join("codex-app-server.history.json")).unwrap();
+        assert!(!text.contains("session"), "{text}");
+        assert!(!text.contains("model"), "{text}");
     }
 
     #[test]

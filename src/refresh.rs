@@ -293,10 +293,7 @@ fn handle_named_pane(cache: &CacheStore, pane: AgentPane, topic_pane: Option<&st
             refresh_selected(cache, &[provider], false, &panes)?;
         }
     }
-    let style = RowStyle::new(
-        cache.percent_style().unwrap_or_default(),
-        cache.brand_glyphs().unwrap_or_default(),
-    );
+    let style = sidebar_row_style(cache);
     let tokens = resolved_pane_tokens(
         cache,
         &mut panes[0],
@@ -313,6 +310,20 @@ fn handle_named_pane(cache: &CacheStore, pane: AgentPane, topic_pane: Option<&st
     // rather than at the next poll.
     notify_low_quota(cache, &tokens);
     publish_pane_tokens(&panes, &tokens, CacheStore::now_millis(), include_topic)
+}
+
+/// How every published sidebar token is shaped: the percentage style, the
+/// brand marks, and whether the window tokens carry a meter.
+fn sidebar_row_style(cache: &CacheStore) -> RowStyle {
+    RowStyle::new(
+        cache.percent_style().unwrap_or_default(),
+        cache.brand_glyphs().unwrap_or_default(),
+    )
+    .with_meter(
+        DashboardPreferences::load_read_only(cache)
+            .map(|preferences| preferences.display.sidebar_meter)
+            .unwrap_or_default(),
+    )
 }
 
 fn resolved_pane_tokens(
@@ -850,10 +861,7 @@ fn publish_resolved(
     }
     let mut tokens = Vec::new();
     let now = CacheStore::now_unix();
-    let style = RowStyle::new(
-        cache.percent_style().unwrap_or_default(),
-        cache.brand_glyphs().unwrap_or_default(),
-    );
+    let style = sidebar_row_style(cache);
     for pane in panes.iter_mut() {
         if let Some(pane_tokens) =
             resolved_pane_tokens(cache, pane, route::resolve_with_identity(pane), now, style)?

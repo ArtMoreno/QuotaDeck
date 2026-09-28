@@ -48,13 +48,46 @@ pub struct MetadataTokens {
 pub struct RowStyle {
     pub percent: PercentStyle,
     pub glyphs: GlyphSet,
+    /// Draw a ten-cell meter inside each sidebar window token.
+    pub meter: bool,
 }
 
 impl RowStyle {
     pub fn new(percent: PercentStyle, glyphs: GlyphSet) -> Self {
-        Self { percent, glyphs }
+        Self {
+            percent,
+            glyphs,
+            meter: false,
+        }
+    }
+
+    pub fn with_meter(mut self, meter: bool) -> Self {
+        self.meter = meter;
+        self
     }
 }
+
+/// Cells in every meter, sidebar and dashboard alike, so a bar means the
+/// same amount wherever it is drawn.
+pub const METER_CELLS: usize = 10;
+
+/// A fixed-width meter for `percent` of a hundred. The displayed number and
+/// the fill are rounded the same way, so `5%` never draws an empty bar next
+/// to a non-zero figure and `95%` never draws a full one.
+pub fn meter(percent: f64, cells: usize, filled: char, empty: char) -> String {
+    let cells = cells.max(1);
+    let filled_cells = ((percent.clamp(0.0, 100.0) / 100.0) * cells as f64).round() as usize;
+    let filled_cells = filled_cells.min(cells);
+    let mut bar = String::with_capacity(cells * 3);
+    bar.extend(std::iter::repeat_n(filled, filled_cells));
+    bar.extend(std::iter::repeat_n(empty, cells - filled_cells));
+    bar
+}
+
+/// The sidebar meter: `▮▯` render in any monospace font, so the meter never
+/// depends on the brand icon font being installed.
+pub const SIDEBAR_METER_FILLED: char = '\u{25ae}';
+pub const SIDEBAR_METER_EMPTY: char = '\u{25af}';
 
 /// A bare percentage style means "that percentage, default marks".
 ///
@@ -65,6 +98,7 @@ impl From<PercentStyle> for RowStyle {
         Self {
             percent,
             glyphs: GlyphSet::default(),
+            meter: false,
         }
     }
 }
@@ -133,7 +167,7 @@ impl MetadataTokens {
         let omp_windows = snapshot.source.starts_with("omp.");
         let (first_window, second_window) = sidebar_windows(snapshot.provider, windows);
         let quota_5h = first_window
-            .map(|window| compact_window_parts(window, now_unix, style.percent).rendered())
+            .map(|window| compact_window_parts(window, now_unix, style).rendered())
             .unwrap_or_else(|| {
                 (!omp_windows)
                     .then(|| missing_five_hour_label(snapshot.provider))
@@ -154,7 +188,7 @@ impl MetadataTokens {
                 }),
             quota_5h,
             quota_week: second_window
-                .map(|window| compact_window_parts(window, now_unix, style.percent).rendered())
+                .map(|window| compact_window_parts(window, now_unix, style).rendered())
                 .unwrap_or_default(),
             quota_week_severity: second_window.map(|window| Severity::for_window(window, now_unix)),
             quota_context: sidebar_context(context),
@@ -287,12 +321,60 @@ pub(crate) fn dashboard_segments(
         .collect()
 }
 
-pub(crate) fn dashboard_segments_filtered(
+/// Where a window sits on a dashboard grid row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CellSlot {
+    /// The 5h window.
+    Short,
+    /// The weekly window, or the monthly one when there is no weekly.
+    Long,
+    /// A third window (OpenCode Go's 30d beside its 7d) that has no column.
+    Extra,
+}
+
+/// One dashboard window with the user's field choices already applied.
+///
+/// The dashboard lays these out itself: on a grid when every cell is a plain
+/// percentage window, as flowing text when a row carries dollar amounts or
+/// more windows than the grid has columns.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WindowCell {
+    pub slot: CellSlot,
+    /// `5h`, `7d`, `30d`, or a provider label such as `plan` or `credits`.
+    pub label: String,
+    /// A dollar amount that belongs to the label (`$14.40`).
+    pub amount: Option<String>,
+    /// The percentage in the user's chosen style, when that field is on.
+    pub percent: Option<f64>,
+    /// The reset instant, when that field is on and the window has one.
+    pub reset: Option<ResetAt>,
+    pub severity: Severity,
+}
+
+impl WindowCell {
+    /// The plain text a non-interactive dashboard prints for this cell.
+    pub fn text(&self, now_unix: u64, clock: Option<time::UtcOffset>) -> String {
+        let mut parts = vec![self.label.clone()];
+        if let Some(amount) = &self.amount {
+            parts.push(amount.clone());
+        }
+        if let Some(percent) = self.percent {
+            parts.push(format!("{}%", format_percent(percent)));
+        }
+        if let Some(reset) = self.reset {
+            parts.push("reset".to_string());
+            parts.push(format_reset(reset, now_unix, clock));
+        }
+        parts.join(" ")
+    }
+}
+
+pub(crate) fn dashboard_cells(
     snapshot: &ProviderSnapshot,
     now_unix: u64,
     style: PercentStyle,
     preference: &ProviderPreference,
-) -> Vec<(String, Severity)> {
+) -> Vec<WindowCell> {
     let kinds = if snapshot.provider == Provider::Hermes {
         [
             WindowKind::Monthly,
@@ -306,23 +388,30 @@ pub(crate) fn dashboard_segments_filtered(
             WindowKind::Monthly,
         ]
     };
+    let has_weekly = window_in(&snapshot.windows, WindowKind::Weekly).is_some();
     kinds
         .into_iter()
         .filter_map(|kind| window_in(&snapshot.windows, kind))
         .filter_map(|window| {
-            filtered_window(window, snapshot.provider, now_unix, style, preference)
-                .map(|value| (value, Severity::for_window(window, now_unix)))
+            let slot = match window.kind {
+                WindowKind::FiveHour => CellSlot::Short,
+                WindowKind::Weekly => CellSlot::Long,
+                WindowKind::Monthly if has_weekly => CellSlot::Extra,
+                WindowKind::Monthly => CellSlot::Long,
+            };
+            window_cell(window, slot, snapshot.provider, now_unix, style, preference)
         })
         .collect()
 }
 
-fn filtered_window(
+fn window_cell(
     window: &UsageWindow,
+    slot: CellSlot,
     provider: Provider,
     now_unix: u64,
     style: PercentStyle,
     preference: &ProviderPreference,
-) -> Option<String> {
+) -> Option<WindowCell> {
     use DashboardField::*;
     let (amount_field, percent_field, reset_field) = match (provider, window.kind) {
         (Provider::Hermes, WindowKind::Monthly) => (Some(PlanAmount), PlanPercent, Some(PlanReset)),
@@ -344,22 +433,14 @@ fn filtered_window(
     if !show_amount && !show_percent && !show_reset {
         return None;
     }
-
-    let mut parts = vec![base.to_string()];
-    if show_amount {
-        parts.push(amount.expect("checked above"));
-    }
-    if show_percent {
-        parts.push(format!("{}%", format_percent(style.percent_of(window))));
-    }
-    if show_reset {
-        parts.push("reset".to_string());
-        parts.push(format_reset_eta(
-            window.resets_at.expect("checked above"),
-            now_unix,
-        ));
-    }
-    Some(parts.join(" "))
+    Some(WindowCell {
+        slot,
+        label: base.to_string(),
+        amount: show_amount.then(|| amount.expect("checked above")),
+        percent: show_percent.then(|| style.percent_of(window)),
+        reset: show_reset.then(|| window.resets_at.expect("checked above")),
+        severity: Severity::for_window(window, now_unix),
+    })
 }
 
 fn missing_five_hour_label(provider: Provider) -> Option<&'static str> {
@@ -468,6 +549,7 @@ fn dashboard_label(label: &str) -> String {
 
 struct WindowParts {
     label: String,
+    meter: Option<String>,
     percent: String,
     eta: String,
 }
@@ -476,18 +558,37 @@ impl WindowParts {
     /// One space-separated token, because Herdr joins sibling tokens with
     /// ` · `. The period label leads, so the value is self-describing however
     /// the sidebar arranges it.
+    ///
+    /// With a meter the token is already wide, so the reset rides behind a
+    /// `↻` instead of the word: `5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m`.
     fn rendered(&self) -> String {
-        if self.eta.is_empty() {
-            return format!("{} {}", self.label, self.percent);
+        match (&self.meter, self.eta.is_empty()) {
+            (None, true) => format!("{} {}", self.label, self.percent),
+            (None, false) => format!("{} {} reset {}", self.label, self.percent, self.eta),
+            (Some(meter), true) => format!("{} {meter} {}", self.label, self.percent),
+            (Some(meter), false) => {
+                format!(
+                    "{} {meter} {} \u{21bb}{}",
+                    self.label, self.percent, self.eta
+                )
+            }
         }
-        format!("{} {} reset {}", self.label, self.percent, self.eta)
     }
 }
 
-fn compact_window_parts(window: &UsageWindow, now_unix: u64, style: PercentStyle) -> WindowParts {
+fn compact_window_parts(window: &UsageWindow, now_unix: u64, style: RowStyle) -> WindowParts {
+    let shown = style.percent.percent_of(window);
     WindowParts {
         label: window.display_label().to_string(),
-        percent: format!("{}%", format_percent(style.percent_of(window))),
+        meter: style.meter.then(|| {
+            meter(
+                shown,
+                METER_CELLS,
+                SIDEBAR_METER_FILLED,
+                SIDEBAR_METER_EMPTY,
+            )
+        }),
+        percent: format!("{}%", format_percent(shown)),
         eta: window
             .resets_at
             .map(|reset| format_reset_eta(reset, now_unix))
@@ -495,7 +596,7 @@ fn compact_window_parts(window: &UsageWindow, now_unix: u64, style: PercentStyle
     }
 }
 
-fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
+pub(crate) fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
     let seconds = reset_at.unix_seconds().saturating_sub(now_unix);
     if seconds == 0 {
         return "due".to_string();
@@ -503,7 +604,46 @@ fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
     format_duration(seconds)
 }
 
-fn format_duration(seconds: u64) -> String {
+/// A reset as the dashboard shows it: a countdown, or with `clock` the local
+/// wall-clock time. Within a day only the time is shown, within a week the
+/// weekday leads it, and beyond that the date alone: a month out, the hour
+/// is noise.
+pub(crate) fn format_reset(
+    reset_at: ResetAt,
+    now_unix: u64,
+    clock: Option<time::UtcOffset>,
+) -> String {
+    let Some(offset) = clock else {
+        return format_reset_eta(reset_at, now_unix);
+    };
+    if reset_at.unix_seconds() <= now_unix {
+        return "due".to_string();
+    }
+    format_clock(reset_at.unix_seconds(), now_unix, offset)
+}
+
+fn format_clock(unix: u64, now_unix: u64, offset: time::UtcOffset) -> String {
+    let Ok(timestamp) = i64::try_from(unix) else {
+        return format_duration(unix.saturating_sub(now_unix));
+    };
+    let Ok(at) = time::OffsetDateTime::from_unix_timestamp(timestamp) else {
+        return format_duration(unix.saturating_sub(now_unix));
+    };
+    let at = at.to_offset(offset);
+    let ahead = unix.saturating_sub(now_unix);
+    let time = format!("{:02}:{:02}", at.hour(), at.minute());
+    if ahead < 24 * 60 * 60 {
+        return time;
+    }
+    if ahead < 7 * 24 * 60 * 60 {
+        let weekday = &at.weekday().to_string()[..3];
+        return format!("{weekday} {time}");
+    }
+    let month = &at.month().to_string()[..3];
+    format!("{} {month}", at.day())
+}
+
+pub(crate) fn format_duration(seconds: u64) -> String {
     let minutes = (seconds / 60).max(1);
     if minutes >= 24 * 60 {
         let days = minutes / (24 * 60);
@@ -657,6 +797,46 @@ mod tests {
         assert_eq!(values.quota_week, "top-up $8.00 65%");
         assert_eq!(values.quota_headroom, Some(25));
         assert!(!values.quota_week.contains("reset"));
+    }
+
+    #[test]
+    fn the_sidebar_meter_rides_inside_the_window_token() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![
+                window(WindowKind::FiveHour, 24.0, 6_840),
+                UsageWindow::new(WindowKind::Weekly, 62.0, None).unwrap(),
+            ],
+            0,
+        );
+        let style = RowStyle::new(PercentStyle::Remaining, GlyphSet::Off).with_meter(true);
+        let values = MetadataTokens::from_snapshot_for_session(&snapshot, 0, None, style);
+        assert_eq!(values.quota_5h, "5h ▮▮▮▮▮▮▮▮▯▯ 76% ↻1h54m");
+        assert_eq!(values.quota_week, "7d ▮▮▮▮▯▯▯▯▯▯ 38%");
+        // The used style fills the meter with what is spent, like the number.
+        let used = RowStyle::new(PercentStyle::Used, GlyphSet::Off).with_meter(true);
+        let values = MetadataTokens::from_snapshot_for_session(&snapshot, 0, None, used);
+        assert_eq!(values.quota_5h, "5h ▮▮▯▯▯▯▯▯▯▯ 24% ↻1h54m");
+        assert_eq!(meter(0.0, 10, '#', '.'), "..........");
+        assert_eq!(meter(4.0, 10, '#', '.'), "..........");
+        assert_eq!(meter(5.0, 10, '#', '.'), "#.........");
+        assert_eq!(meter(100.0, 10, '#', '.'), "##########");
+        assert_eq!(meter(96.0, 10, '#', '.'), "##########");
+        assert_eq!(meter(94.0, 10, '#', '.'), "#########.");
+    }
+
+    #[test]
+    fn clock_resets_show_time_then_weekday_then_date() {
+        let now = 1_759_050_000; // 2025-09-28 09:00 UTC, a Sunday
+        let clock = Some(time::UtcOffset::UTC);
+        let at = |seconds: u64| ResetAt::from_unix_seconds(now + seconds);
+        assert_eq!(format_reset(at(600), now, clock), "09:10");
+        assert_eq!(format_reset(at(3 * 86_400), now, clock), "Wed 09:00");
+        assert_eq!(format_reset(at(25 * 86_400), now, clock), "23 Oct");
+        assert_eq!(format_reset(at(0), now, clock), "due");
+        assert_eq!(format_reset(at(600), now, None), "10m");
+        let plus_two = Some(time::UtcOffset::from_hms(2, 0, 0).unwrap());
+        assert_eq!(format_reset(at(600), now, plus_two), "11:10");
     }
 
     #[test]

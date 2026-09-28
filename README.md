@@ -400,6 +400,22 @@ remains open, and immediately when `r` refreshes it.
 OpenCode Go is hidden by default; enable it under Dashboard providers when that
 separate subscription is in use.
 
+To show OpenCode Go quota, sign in to Go in OpenCode itself; QuotaDeck has no
+separate login:
+
+```sh
+opencode auth login      # choose OpenCode Go and paste your Go key
+opencode auth list       # confirm OpenCode Go is listed
+```
+
+QuotaDeck then uses the same Go login OpenCode uses. OpenCode 1.x and 2.x both
+work: OpenCode 2 keeps logins and sessions in `opencode.db`, and QuotaDeck reads
+them there (read-only), falling back to `auth.json` on older versions.
+`OPENCODE_API_KEY`, when set where Herdr starts, takes precedence. With no Go
+login the Go row says `credentials unavailable`. Sidebar Go quota appears only
+on panes whose session actually uses an `opencode-go` model; local providers
+such as Ollama have no quota and show model and context only.
+
 The sidebar has short and long quota rows. OMP's common windows occupy those rows
 while retaining their labels; one normalized window is shown per row.
 

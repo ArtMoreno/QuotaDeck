@@ -99,6 +99,20 @@ OpenCode 本地行以只读方式统计最近 30 天 token 与已记录花费；
 不是“剩余额度”。Hermes plan 显示真实续期时间；top-up 和 OpenRouter 余额没有固定
 重置时间，因此不会显示虚构倒计时。
 
+要显示 OpenCode Go 额度，请在 OpenCode 本身登录 Go；QuotaDeck 没有单独的登录：
+
+```sh
+opencode auth login      # 选择 OpenCode Go 并粘贴 Go key
+opencode auth list       # 确认列表中有 OpenCode Go
+```
+
+QuotaDeck 使用与 OpenCode 相同的 Go 登录。OpenCode 1.x 与 2.x 均支持：OpenCode 2
+把登录和 session 存在 `opencode.db` 中，QuotaDeck 以只读方式读取；旧版本则读取
+`auth.json`。若在 Herdr 启动环境中设置了 `OPENCODE_API_KEY`，则优先使用它。没有 Go
+登录时，Go 行显示 `credentials unavailable`。侧栏只在 session 实际使用
+`opencode-go` 模型的 pane 上显示 Go 额度；Ollama 等本地供应商没有额度，只显示
+model 和 context。
+
 Topic 默认关闭。开启后，截短的可见 prompt 只写入本机 Herdr metadata，TTL
 为 24 小时。通过 Windows 安装器显式传入的 OpenRouter key 会保存在当前用户的
 插件配置目录中，完整卸载时删除；不会写入额度 cache 或日志。

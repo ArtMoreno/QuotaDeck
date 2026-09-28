@@ -80,7 +80,24 @@ fn install(path: &Path, executable: &Path, state: &Path, config: &Path) -> Resul
         "QuotaDeck command: {} (runs in the current pane; q returns to the shell).",
         path.display()
     );
+    if let Some(directory) = path.parent() {
+        if !directory_on_path(directory) {
+            println!(
+                "{} is not on PATH here; run the command by that path, or add the directory to your shell's PATH.",
+                directory.display()
+            );
+        }
+    }
     Ok(())
+}
+
+/// Whether `directory` is in this process's PATH. The configure action runs
+/// in Herdr's environment, which is usually the user's login environment,
+/// so a miss here is a fair warning even if a particular shell differs.
+fn directory_on_path(directory: &Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|entry| entry == directory))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]

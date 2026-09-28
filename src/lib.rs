@@ -18,4 +18,5 @@ pub mod providers;
 pub mod refresh;
 pub mod route;
 pub mod settings;
+pub mod signin;
 pub mod trend;

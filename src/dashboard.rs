@@ -125,6 +125,8 @@ struct DashboardRow {
     provider: DashboardProvider,
     snapshot: Option<ProviderSnapshot>,
     history_identity: Option<String>,
+    /// What to do about a row with no quota to show, from the sign-in check.
+    hint: Option<String>,
 }
 
 pub fn run() -> Result<()> {
@@ -409,13 +411,16 @@ fn render_snapshot_with_preferences(
     for row in dashboard_rows(cache, preferences, now, order)? {
         let preference = preferences.get(row.provider);
         output.push_str(&match row.provider {
-            DashboardProvider::OpenCode => render_opencode_usage(opencode_usage, style, preference),
+            DashboardProvider::OpenCode => {
+                render_opencode_usage(opencode_usage, style, preference, row.hint.as_deref())
+            }
             _ => render_quota_provider(
                 row.provider.quota_provider().expect("quota provider"),
                 row.snapshot.as_ref(),
                 now,
                 style,
                 preference,
+                row.hint.as_deref(),
             ),
         });
         output.push_str("\r\n");
@@ -430,7 +435,7 @@ pub fn render_provider(
     style: impl Into<RowStyle>,
 ) -> String {
     let preference = ProviderPreference::defaults(DashboardProvider::from_quota_provider(provider));
-    render_quota_provider(provider, snapshot, now_unix, style, &preference)
+    render_quota_provider(provider, snapshot, now_unix, style, &preference, None)
 }
 
 fn render_quota_provider(
@@ -439,14 +444,22 @@ fn render_quota_provider(
     now_unix: u64,
     style: impl Into<RowStyle>,
     preference: &ProviderPreference,
+    hint: Option<&str>,
 ) -> String {
     let style = style.into();
-    let values = provider_content(provider, snapshot, now_unix, style.percent, preference)
-        .text(now_unix, None)
-        .into_iter()
-        .map(|(value, _)| value)
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let values = provider_content(
+        provider,
+        snapshot,
+        now_unix,
+        style.percent,
+        preference,
+        hint,
+    )
+    .text(now_unix, None)
+    .into_iter()
+    .map(|(value, _)| value)
+    .collect::<Vec<_>>()
+    .join(" · ");
     format!(
         "{}  {values}",
         style.glyphs.label(provider, provider.display_name())
@@ -478,6 +491,10 @@ fn dashboard_rows(
                 )
             }
         };
+        let problem = preference
+            .provider
+            .quota_provider()
+            .and_then(|provider| cache.refresh_problem_code(provider));
         if let Some(provider) = preference.provider.quota_provider() {
             let failure = cache.refresh_problem(provider);
             if failure.is_some() && snapshot.is_none() {
@@ -487,10 +504,19 @@ fn dashboard_rows(
                 snapshot.refresh_warning = cache.refresh_warning(provider, Some(snapshot), now);
             }
         }
+        // Only a row with nothing to draw asks what is wrong: a stale value
+        // keeps its own wording, and the probes stay off rows that work.
+        let has_windows = snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.windows.is_empty());
+        let hint = (problem.is_some() || !has_windows)
+            .then(|| crate::signin::row_hint(preference.provider, problem))
+            .flatten();
         rows.push(DashboardRow {
             provider: preference.provider,
             snapshot,
             history_identity,
+            hint,
         });
     }
     if order.is_quota() {
@@ -558,8 +584,9 @@ fn render_opencode_usage(
     usage: Option<LocalUsage>,
     style: RowStyle,
     preference: &ProviderPreference,
+    hint: Option<&str>,
 ) -> String {
-    let values = opencode_segments(usage, preference)
+    let values = opencode_segments(usage, preference, hint)
         .into_iter()
         .map(|(value, _)| value)
         .collect::<Vec<_>>()
@@ -685,7 +712,7 @@ fn render_terminal_scrolled(
                 DashboardProvider::OpenCode => summary_lines(
                     label,
                     label_color,
-                    opencode_segments(opencode_usage, preference)
+                    opencode_segments(opencode_usage, preference, row.hint.as_deref())
                         .into_iter()
                         .map(|(text, severity)| Segment::plain(text, severity_color(severity)))
                         .collect(),
@@ -697,6 +724,7 @@ fn render_terminal_scrolled(
                     now,
                     style,
                     preference,
+                    row.hint.as_deref(),
                     (label, label_color),
                     panel_width,
                     grid,
@@ -891,7 +919,11 @@ fn provider_content(
     now_unix: u64,
     style: PercentStyle,
     preference: &ProviderPreference,
+    hint: Option<&str>,
 ) -> RowContent {
+    if let Some(hint) = hint {
+        return RowContent::Text(vec![(hint.to_string(), Severity::Warning)]);
+    }
     if let Some(snapshot) = snapshot {
         if let Some(warning) = &snapshot.refresh_warning {
             return RowContent::Text(vec![(warning.clone(), Severity::Warning)]);
@@ -929,7 +961,7 @@ fn provider_segments(
     style: PercentStyle,
     preference: &ProviderPreference,
 ) -> Vec<(String, Severity)> {
-    provider_content(provider, snapshot, now_unix, style, preference).text(now_unix, None)
+    provider_content(provider, snapshot, now_unix, style, preference, None).text(now_unix, None)
 }
 
 /// A value on a flowing row: its styled parts and its printed width.
@@ -993,13 +1025,21 @@ fn provider_lines(
     now_unix: u64,
     style: RowStyle,
     preference: &ProviderPreference,
+    hint: Option<&str>,
     label: (String, Color),
     width: usize,
     grid: Option<GridLayout>,
     clock: Option<UtcOffset>,
 ) -> Vec<StyledLine> {
     let (label, label_color) = label;
-    let content = provider_content(provider, snapshot, now_unix, style.percent, preference);
+    let content = provider_content(
+        provider,
+        snapshot,
+        now_unix,
+        style.percent,
+        preference,
+        hint,
+    );
     // Flowing rows carry meters only in a pane wide enough for the grid, so
     // one frame never mixes rows with meters and rows without.
     let bars = grid.is_some_and(|grid| grid.bar > 0);
@@ -1319,7 +1359,11 @@ fn help_lines() -> Vec<StyledLine> {
             "sort by least left, or back to the saved order (this pane only)",
         ),
         ("t", "reset times as a clock time, or as a countdown"),
-        ("s", "open settings"),
+        ("s", "open settings · hide providers you do not use"),
+        (
+            "setup",
+            "run `quotadeck setup` in a shell for guided sign-in",
+        ),
         ("↑ ↓ j k", "scroll · PgUp PgDn Home End"),
         ("?", "close this help"),
         ("q Esc", "close QuotaDeck"),
@@ -1410,6 +1454,7 @@ fn summary_lines(
 fn opencode_segments(
     usage: Option<LocalUsage>,
     preference: &ProviderPreference,
+    hint: Option<&str>,
 ) -> Vec<(String, Severity)> {
     match usage {
         Some(usage) => [
@@ -1426,8 +1471,11 @@ fn opencode_segments(
         .into_iter()
         .flatten()
         .collect(),
-        None if preference.fields.is_empty() => Vec::new(),
-        None => vec![("30d N/A".to_string(), Severity::Unknown)],
+        None => match hint {
+            Some(hint) => vec![(hint.to_string(), Severity::Warning)],
+            None if preference.fields.is_empty() => Vec::new(),
+            None => vec![("30d N/A".to_string(), Severity::Unknown)],
+        },
     }
 }
 
@@ -1690,6 +1738,33 @@ pub fn run_json() -> Result<()> {
     Ok(())
 }
 
+/// Each row's quota as one line without its label, or `None` when the row
+/// has nothing to show. For the `setup` checklist.
+pub(crate) fn provider_quota_text(
+    cache: &CacheStore,
+    preferences: &DashboardPreferences,
+    opencode_usage: Option<LocalUsage>,
+    now: u64,
+) -> Result<Vec<(DashboardProvider, Option<String>)>> {
+    let model = dashboard_json(cache, preferences, opencode_usage, &[], now)?;
+    Ok(model
+        .providers
+        .iter()
+        .filter_map(|entry| {
+            let provider = DashboardProvider::parse(entry.id)?;
+            let text = matches!(entry.state, "ok" | "stale").then(|| {
+                entry
+                    .strip
+                    .strip_prefix(entry.label)
+                    .unwrap_or(&entry.strip)
+                    .trim()
+                    .to_string()
+            });
+            Some((provider, text))
+        })
+        .collect())
+}
+
 fn dashboard_json(
     cache: &CacheStore,
     preferences: &DashboardPreferences,
@@ -1724,10 +1799,12 @@ fn dashboard_json(
                         tokens: usage.tokens,
                         cost_usd: usage.cost_usd,
                     });
+                } else {
+                    entry.reason = row.hint.clone();
                 }
                 entry.strip = strip_text(
                     row.provider.label(),
-                    &opencode_segments(opencode_usage, preference)
+                    &opencode_segments(opencode_usage, preference, row.hint.as_deref())
                         .into_iter()
                         .map(|(text, _)| text)
                         .collect::<Vec<_>>(),
@@ -1741,7 +1818,7 @@ fn dashboard_json(
                     let stale = code.is_none() && snapshot.refresh_warning.is_some();
                     if let Some(code) = code {
                         entry.reason_code = Some(code);
-                        entry.reason = snapshot.refresh_warning.clone();
+                        entry.reason = row.hint.clone().or(snapshot.refresh_warning.clone());
                     } else {
                         let cells = dashboard_cells(snapshot, now, percent, preference);
                         entry.windows = cells
@@ -1758,15 +1835,23 @@ fn dashboard_json(
                         }
                     }
                 }
+                if entry.state == "unavailable" && entry.reason.is_none() {
+                    entry.reason = row.hint.clone();
+                }
                 let segments = match &entry.reason {
                     Some(reason) => vec![reason.clone()],
-                    None => {
-                        provider_content(provider, row.snapshot.as_ref(), now, percent, preference)
-                            .text(now, None)
-                            .into_iter()
-                            .map(|(text, _)| text)
-                            .collect()
-                    }
+                    None => provider_content(
+                        provider,
+                        row.snapshot.as_ref(),
+                        now,
+                        percent,
+                        preference,
+                        None,
+                    )
+                    .text(now, None)
+                    .into_iter()
+                    .map(|(text, _)| text)
+                    .collect(),
                 };
                 entry.strip = strip_text(row.provider.label(), &segments);
             }
@@ -1925,6 +2010,84 @@ mod tests {
             text.push(character);
         }
         text
+    }
+
+    #[test]
+    fn rows_without_quota_name_the_step_that_fixes_them() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        cache
+            .set_refresh_problem(Provider::Grok, Some("login"))
+            .unwrap();
+        cache
+            .set_refresh_problem(Provider::Hermes, Some("credentials"))
+            .unwrap();
+        cache
+            .set_refresh_problem(Provider::Codex, Some("failed"))
+            .unwrap();
+        let mut codex = ProviderSnapshot::new(
+            Provider::Codex,
+            vec![window(WindowKind::FiveHour, 50.0, None)],
+            1000,
+        );
+        codex.refresh_warning = None;
+        cache.save(&codex).unwrap();
+
+        crate::signin::set_test_evidence(Some(crate::signin::Evidence {
+            credential: None,
+            installed: true,
+        }));
+        let frame = render_snapshot_with_opencode(&cache, 1001, None).unwrap();
+        let model = dashboard_json(
+            &cache,
+            &DashboardPreferences::load_or_default(&cache),
+            None,
+            &[],
+            1001,
+        )
+        .unwrap();
+        crate::signin::set_test_evidence(None);
+
+        assert!(
+            frame.contains("Grok  sign-in expired · run grok login"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("Hermes  not signed in · run hermes portal login"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("Agy  no data yet · send one message in agy"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("OpenRouter  no API key · run quotadeck setup"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("Codex  refresh failed; check connection"),
+            "a network failure keeps its own message: {frame}"
+        );
+        let grok = model
+            .providers
+            .iter()
+            .find(|provider| provider.id == "grok")
+            .unwrap();
+        assert_eq!(grok.reason_code, Some("login"));
+        assert_eq!(
+            grok.reason.as_deref(),
+            Some("sign-in expired · run grok login")
+        );
+        let agy = model
+            .providers
+            .iter()
+            .find(|provider| provider.id == "agy")
+            .unwrap();
+        assert_eq!(agy.reason_code, Some("none"));
+        assert_eq!(
+            agy.reason.as_deref(),
+            Some("no data yet · send one message in agy")
+        );
     }
 
     #[test]

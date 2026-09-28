@@ -11,6 +11,11 @@ const SESSION_BY_ID: &str = "SELECT id FROM session WHERE id = ?1 LIMIT 1";
 const MESSAGE_DATA_FOR_SESSION: &str =
     "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created DESC LIMIT 8";
 const MESSAGE_DATA_SINCE: &str = "SELECT data FROM message WHERE time_created >= ?1";
+/// OpenCode 2 moved messages to `session_message` and records the role in a
+/// `type` column instead of inside `data`; the token and cost fields kept
+/// their shape.
+const ASSISTANT_DATA_SINCE_V2: &str =
+    "SELECT data FROM session_message WHERE type = 'assistant' AND time_created >= ?1";
 const MAX_MODELS_BYTES: u64 = 8 * 1024 * 1024;
 const THIRTY_DAYS_SECONDS: u64 = 30 * 24 * 60 * 60;
 
@@ -248,7 +253,14 @@ pub fn local_usage_30d(paths: &OpenCodePaths, now_unix: u64) -> Option<LocalUsag
         .checked_mul(1_000)
         .and_then(|value| i64::try_from(value).ok())?;
     let connection = open_readonly(&paths.db).ok()?;
-    let mut statement = connection.prepare(MESSAGE_DATA_SINCE).ok()?;
+    let v2 = connection.prepare(MESSAGE_DATA_SINCE).is_err();
+    let mut statement = connection
+        .prepare(if v2 {
+            ASSISTANT_DATA_SINCE_V2
+        } else {
+            MESSAGE_DATA_SINCE
+        })
+        .ok()?;
     let rows = statement
         .query_map([cutoff_millis], |row| row.get::<_, String>(0))
         .ok()?;
@@ -259,7 +271,7 @@ pub fn local_usage_30d(paths: &OpenCodePaths, now_unix: u64) -> Option<LocalUsag
     let mut found = false;
     for data in rows {
         let value: Value = serde_json::from_str(&data.ok()?).ok()?;
-        if value.get("role").and_then(Value::as_str) != Some("assistant") {
+        if !v2 && value.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
         }
         found = true;
@@ -671,6 +683,58 @@ mod tests {
                 [1_900_000_000_000_i64],
             )
             .unwrap();
+        drop(connection);
+
+        assert_eq!(
+            local_usage_30d(&paths, 2_000_000_000),
+            Some(LocalUsage {
+                tokens: 165,
+                cost_usd: 1.25,
+            })
+        );
+    }
+
+    #[test]
+    fn local_usage_reads_opencode_2_session_messages() {
+        let directory = tempdir().unwrap();
+        let paths = OpenCodePaths::from_dir(directory.path());
+        let connection = Connection::open(&paths.db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE session_message (
+                    id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+                    seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+                    time_updated INTEGER NOT NULL, data TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        for (id, kind, time, data) in [
+            (
+                "a",
+                "assistant",
+                2_000_000_000_000_i64,
+                r#"{"tokens":{"input":100,"output":10,"reasoning":5,"cache":{"read":20,"write":30}},"cost":1.25}"#,
+            ),
+            (
+                "b",
+                "user",
+                2_000_000_000_000,
+                r#"{"tokens":{"input":999}}"#,
+            ),
+            (
+                "c",
+                "assistant",
+                1_900_000_000_000,
+                r#"{"tokens":{"input":999},"cost":9.0}"#,
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO session_message VALUES (?1, 's', ?2, 0, ?3, ?3, ?4)",
+                    rusqlite::params![id, kind, time, data],
+                )
+                .unwrap();
+        }
         drop(connection);
 
         assert_eq!(

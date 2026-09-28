@@ -38,6 +38,24 @@ pub fn parse_action_json(input: &str, log_id: Option<&str>) -> Result<String> {
         .context("Herdr action response has no log_id")
 }
 
+/// The captured stdout of one finished action log, so the installer can show
+/// what `configure` reported. Empty when the log is not listed or printed
+/// nothing.
+pub fn action_log_stdout(input: &str, log_id: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(input).context("parse Herdr action JSON")?;
+    let logs = value
+        .pointer("/result/logs")
+        .and_then(Value::as_array)
+        .context("Herdr log response has no logs array")?;
+    Ok(logs
+        .iter()
+        .find(|log| log.get("log_id").and_then(Value::as_str) == Some(log_id))
+        .and_then(|log| log.get("stdout"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
 const METADATA_TTL_MS: &str = "86400000";
 const MAX_METADATA_TOKENS: usize = 16;
 /// Every name [`desired_tokens`] can produce, and nothing else.
@@ -992,6 +1010,20 @@ mod tests {
         );
         assert!(parse_action_json("not json", None).is_err());
         assert!(parse_action_json(r#"{"result":{}}"#, None).is_err());
+    }
+
+    #[test]
+    fn action_log_stdout_returns_only_the_named_log_output() {
+        let listed = r#"{"result":{"logs":[
+            {"log_id":"plugin-log-6","stdout":"other"},
+            {"log_id":"plugin-log-7","status":"succeeded","stdout":"Providers found\n"}
+        ]}}"#;
+        assert_eq!(
+            action_log_stdout(listed, "plugin-log-7").unwrap(),
+            "Providers found\n"
+        );
+        assert_eq!(action_log_stdout(listed, "plugin-log-9").unwrap(), "");
+        assert!(action_log_stdout(r#"{"result":{}}"#, "plugin-log-7").is_err());
     }
     use crate::model::{
         CacheUsage, ContextUsage, ProviderSnapshot, ResetAt, UsageWindow, WindowKind,

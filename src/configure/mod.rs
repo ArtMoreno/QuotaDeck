@@ -160,6 +160,9 @@ pub fn run(
         launcher::apply()?;
         font::apply(glyphs)?;
         cache.clear_settings_apply_pending()?;
+        // A report, not part of the install: a probe that cannot run must
+        // never fail an otherwise good configure.
+        let _ = crate::signin::print_local_report();
     } else {
         let cache = CacheStore::from_env().ok();
         let layout = resolved_sidebar_layout(options.sidebar_layout, cache.as_ref());

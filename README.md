@@ -105,6 +105,48 @@ Restart already-running agent panes once. To install only a subset:
 Supported values: `all`, `claude`, `codex`, `grok`, `agy`, `opencode`, `pi`,
 `omp`, `hermes`.
 
+## Sign in to providers
+
+QuotaDeck uses the logins your agents already have. Setup finds them itself
+and lists what it found; for anything missing, run the guided check:
+
+```sh
+quotadeck setup
+```
+
+```text
+Showing quota
+  ✓ Claude       5h 87% reset 4h07m · 7d 66% reset 5d6h  (~/.claude/.credentials.json)
+  ✓ Codex        7d 80% reset 4d23h  (~/.codex/auth.json)
+
+Needs a step
+  ✗ Grok         not signed in
+                 → Run `grok login`.
+  ! Hermes       sign-in expired
+                 → The stored login was rejected. Run `hermes portal login` to sign in again.
+
+Not installed: Agy, OMP
+  Hide their rows: press s in the dashboard → Dashboard providers.
+```
+
+It refreshes every provider once, then offers to run each missing sign-in
+command for you and checks again. For OpenRouter it asks for an API key,
+with the input hidden, and saves it only to QuotaDeck's plugin config
+directory. `--no-prompt` prints the list without asking anything.
+
+| Provider | Found from | Sign in with |
+| --- | --- | --- |
+| Claude | `~/.claude/.credentials.json` or the macOS Keychain | `claude auth login` |
+| Codex | `~/.codex/auth.json` | `codex login` |
+| Grok | `~/.grok/auth.json` | `grok login` |
+| Hermes | `~/.hermes/auth.json` | `hermes portal login` |
+| OpenRouter | an API key ([see below](#hermes-and-openrouter)) | `quotadeck setup` asks for it |
+| OpenCode Go | OpenCode's stored `opencode-go` key or `OPENCODE_API_KEY` | `opencode auth login` |
+| Agy, OMP, OpenCode | the agent's own reports | use the agent once |
+
+The dashboard says the same thing in place: a row with no quota shows the
+next step, such as `not signed in · run grok login`, instead of `N/A`.
+
 ## Dashboard
 
 Press `prefix+shift+d` to open QuotaDeck as a real resizable split. You can
@@ -349,8 +391,9 @@ installs with `herdr plugin install ArtMoreno/quota-deck`, run the
 configure action, and reopen your QuotaDeck pane.
 
 If a request fails, the dashboard shows `refresh failed; check connection`.
-An expired or rejected login shows `sign in again`; missing credentials or a
-missing CLI have their own messages. Old cached values are hidden while these
+An expired or rejected login shows `sign-in expired · run <command>`, and a
+provider that was never signed in shows the command that signs it in; a
+missing CLI has its own message. Old cached values are hidden while these
 messages are shown. Without a successful update for two polling intervals
 (minimum two minutes), the row shows its last-update age as stale. Sign into
 the affected harness/provider normally, then press `r` to retry. QuotaDeck does
@@ -500,6 +543,7 @@ herdr integration install omp
 | Dashboard OpenCode usage is `N/A` | Confirm OpenCode has completed a local assistant turn in the last 30 days and its data directory is readable. |
 | OMP has model/context but no quota | Run `omp usage --json --redact --provider <id>` and confirm a report exists. |
 | Herdr cannot execute OMP | Put `omp` on the server's `PATH`, or set `HERDR_AGENT_QUOTA_OMP_BIN`. |
+| A row says `not signed in` or `sign-in expired` | Run `quotadeck setup`; it lists every provider and runs the sign-in command for you. |
 | Claude shows `N/A` | Confirm Claude Code is signed in; QuotaDeck reads its local OAuth credential and falls back to a fresh statusLine snapshot. |
 | Agy shows `N/A` | Send one turn so its statusLine emits a snapshot. |
 | Rows do not appear | Run `herdr plugin action invoke configure --plugin herdr-agent-quota-win`, then restart affected panes. |

@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `quotadeck setup`: checks every provider, lists which ones show quota and
+  where each login was found, then offers to run the missing sign-in commands
+  (`grok login`, `hermes portal login`, ...) and takes an OpenRouter key with
+  hidden input. `configure --apply` and `install.sh` print the same list.
+- Dashboard rows without quota name the next step (`not signed in · run grok
+  login`, `sign-in expired · run hermes portal login`, `not installed · hide it
+  in settings (s)`) instead of `N/A` or `credentials unavailable`.
 - Dashboard grid: in a pane at least 72 columns wide each provider shows a
   ten-cell meter, percentage and reset time per window in fixed columns, with
   a caption row instead of a repeated `reset`. Narrower panes flow the same
@@ -35,6 +42,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The dashboard's OpenCode row reads OpenCode 2's `session_message` table, so
+  30-day usage shows again instead of `30d N/A`.
 - Setup installs the bundled `QuotaDeck Icons` font into the user's font
   directory on macOS and Linux, so terminals that use the system font
   fallback draw every brand mark without manual font steps. A full uninstall

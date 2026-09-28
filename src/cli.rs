@@ -149,6 +149,16 @@ pub enum Command {
         #[arg(long)]
         reload_herdr: bool,
     },
+    /// Check which providers are signed in and walk through the rest.
+    ///
+    /// Refreshes every provider once, lists which ones show quota and where
+    /// each login was found, then offers to run the sign-in command for each
+    /// one that is missing or expired.
+    Setup {
+        /// Only print the checklist; never prompt or run a sign-in command.
+        #[arg(long)]
+        no_prompt: bool,
+    },
     /// Render the settings pane shown in the Herdr popup pane.
     Settings,
     /// Open this plugin's settings popup through Herdr. Used by the plugin
@@ -168,6 +178,9 @@ pub enum Command {
         /// Return the status of this log entry; otherwise return the invoked log id.
         #[arg(long)]
         log_id: Option<String>,
+        /// With `--log-id`, print that entry's captured stdout instead of its status.
+        #[arg(long, requires = "log_id")]
+        stdout: bool,
     },
 }
 

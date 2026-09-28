@@ -670,6 +670,47 @@ mod tests {
     }
 
     #[test]
+    fn opencode_2_store_resolves_go_and_payg_from_local_files() {
+        let directory = tempdir().unwrap();
+        let data = directory.path().join("opencode");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("auth.json"),
+            r#"{"opencode-go":{"type":"api","key":"placeholder"},"anthropic":{"type":"api","key":"placeholder"}}"#,
+        )
+        .unwrap();
+        crate::opencode::write_fixture_db_v2(
+            &data.join("opencode.db"),
+            &[
+                (
+                    "ses_go",
+                    "assistant",
+                    r#"{"model":{"id":"kimi-k2.5","providerID":"opencode-go","variant":"default"}}"#,
+                ),
+                (
+                    "ses_payg",
+                    "assistant",
+                    r#"{"model":{"id":"sonnet","providerID":"anthropic","variant":"default"}}"#,
+                ),
+            ],
+        )
+        .unwrap();
+        let paths = OpenCodePaths::from_dir(data);
+        assert_eq!(
+            resolve_opencode_with_identity(Some("ses_go"), Some(paths.clone())).resolution,
+            Resolution::Subscription(BillingTarget::opencode_go())
+        );
+        assert_eq!(
+            resolve_opencode_with_identity(Some("ses_payg"), Some(paths.clone())).resolution,
+            Resolution::NoSubscription
+        );
+        assert_eq!(
+            resolve_opencode_with_identity(Some("ses_absent"), Some(paths)).resolution,
+            Resolution::Indeterminate
+        );
+    }
+
+    #[test]
     fn pane_without_session_id_is_never_guessed_from_credentials() {
         let directory = tempdir().unwrap();
         let _paths = write_opencode(

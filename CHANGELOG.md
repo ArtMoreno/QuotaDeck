@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-29
+
 ### Added
 
 - `quotadeck setup`: checks every provider, lists which ones show quota and
@@ -44,6 +46,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The dashboard's OpenCode row reads OpenCode 2's `session_message` table, so
   30-day usage shows again instead of `30d N/A`.
+- OpenCode panes on OpenCode 2 resolve their provider, model and context
+  again. OpenCode 2 moved sessions to `session_v2` and `session_message`; the
+  route now comes from the latest assistant reply's `model`, falling back to
+  the session's own model before the first reply, so OpenCode Go routing works
+  again. OpenCode 1.x stores keep working.
+- OpenCode Go quota shows on OpenCode 2. OpenCode 2 keeps logins in the
+  `credential` table of `opencode.db` instead of `auth.json`; QuotaDeck now
+  reads the login OpenCode itself uses from there (read-only) and falls back
+  to `auth.json` on older versions. `OPENCODE_API_KEY` still takes precedence.
+- `quotadeck setup` lists a hidden provider that has a login as `Signed in but
+  hidden` with the step that shows its row, instead of `Hidden and not set up`.
 - Setup installs the bundled `QuotaDeck Icons` font into the user's font
   directory on macOS and Linux, so terminals that use the system font
   fallback draw every brand mark without manual font steps. A full uninstall
@@ -749,7 +762,9 @@ Herdr install; the binary name is unchanged.
 - A popup dashboard pane, event-driven refresh, and a local snapshot cache that
   survives provider failures.
 
-[Unreleased]: https://github.com/ArtMoreno/quota-deck/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ArtMoreno/quota-deck/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/ArtMoreno/quota-deck/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/ArtMoreno/quota-deck/compare/v1.4.3...v1.5.0
 [1.4.0]: https://github.com/ArtMoreno/quota-deck/tree/v1.4.0
 [1.3.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/levi-qiao/herdr-agent-quota/compare/v1.1.0...v1.2.0

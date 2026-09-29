@@ -1,6 +1,6 @@
 id = "herdr-agent-quota-win"
 name = "quota-deck"
-version = "1.5.0"
+version = "1.6.0"
 min_herdr_version = "0.8.2"
 description = "Credential-scoped AI quota and context for Claude, Codex, Grok, Agy, OpenCode, Pi, omp, OpenRouter, and Hermes."
 platforms = ["macos", "linux", "windows"]

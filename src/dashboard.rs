@@ -608,6 +608,18 @@ fn render_terminal(
         .map(|frame| frame.text)
 }
 
+#[cfg(test)]
+fn render_terminal_at(
+    cache: &CacheStore,
+    width: u16,
+    height: u16,
+    opencode_usage: Option<LocalUsage>,
+    now: u64,
+) -> Result<String> {
+    render_terminal_scrolled_at(cache, width, height, opencode_usage, &View::default(), now)
+        .map(|frame| frame.text)
+}
+
 /// The column grid the interactive pane draws when it is wide enough.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GridLayout {
@@ -658,8 +670,25 @@ fn render_terminal_scrolled(
     opencode_usage: Option<LocalUsage>,
     view: &View,
 ) -> Result<Frame> {
+    render_terminal_scrolled_at(
+        cache,
+        width,
+        height,
+        opencode_usage,
+        view,
+        CacheStore::now_unix(),
+    )
+}
+
+fn render_terminal_scrolled_at(
+    cache: &CacheStore,
+    width: u16,
+    height: u16,
+    opencode_usage: Option<LocalUsage>,
+    view: &View,
+    now: u64,
+) -> Result<Frame> {
     crossterm::style::force_color_output(true);
-    let now = CacheStore::now_unix();
     let style = RowStyle::new(
         cache.percent_style().unwrap_or_default(),
         cache.brand_glyphs().unwrap_or_default(),
@@ -2324,7 +2353,7 @@ mod tests {
                 now,
             ))
             .unwrap();
-        let frame = plain(&render_terminal(&cache, 78, 24, None).unwrap());
+        let frame = plain(&render_terminal_at(&cache, 78, 24, None, now).unwrap());
         let lines: Vec<&str> = frame.split("\r\n").collect();
         let header = lines.iter().find(|line| line.contains("resets")).unwrap();
         let claude = lines.iter().find(|line| line.contains("Claude")).unwrap();
@@ -2377,7 +2406,7 @@ mod tests {
             ))
             .unwrap();
         // Too narrow for the grid: rows flow on one line without meters.
-        let frame = plain(&render_terminal(&cache, 60, 24, None).unwrap());
+        let frame = plain(&render_terminal_at(&cache, 60, 24, None, now).unwrap());
         assert!(!frame.contains("resets  "), "{frame}");
         assert!(
             frame.contains("5h 82% reset 1h54m · 7d 38% reset 3d23h"),
@@ -2386,7 +2415,7 @@ mod tests {
         assert!(!frame.contains('█'), "{frame}");
         // A pane with a little more room gets the grid back with a shorter
         // meter rather than a flowing line.
-        let frame = plain(&render_terminal(&cache, 70, 24, None).unwrap());
+        let frame = plain(&render_terminal_at(&cache, 70, 24, None, now).unwrap());
         assert!(
             frame.contains("5h  █████░  82%  1h54m   7d  ██░░░░  38%  3d23h"),
             "{frame}"
@@ -2396,7 +2425,7 @@ mod tests {
         preferences.display.bars = false;
         preferences.save(&cache).unwrap();
         // Without meters the grid is narrow enough for this pane again.
-        let frame = plain(&render_terminal(&cache, 60, 24, None).unwrap());
+        let frame = plain(&render_terminal_at(&cache, 60, 24, None, now).unwrap());
         assert!(frame.contains("5h   82%  1h54m"), "{frame}");
         assert!(!frame.contains('█'), "{frame}");
     }
@@ -2421,12 +2450,12 @@ mod tests {
             .unwrap();
         // With both meters the row would wrap, so it keeps one line and
         // drops them; a wider pane gets them back.
-        let frame = plain(&render_terminal(&cache, 78, 24, None).unwrap());
+        let frame = plain(&render_terminal_at(&cache, 78, 24, None, now).unwrap());
         assert!(
             frame.contains("plan 72% reset 25d23h · top-up $3.60 18%"),
             "{frame}"
         );
-        let wide = plain(&render_terminal(&cache, 100, 24, None).unwrap());
+        let wide = plain(&render_terminal_at(&cache, 100, 24, None, now).unwrap());
         assert!(
             wide.contains("plan ███████░░░ 72% reset 25d23h · top-up $3.60 ██░░░░░░░░ 18%"),
             "{wide}"
